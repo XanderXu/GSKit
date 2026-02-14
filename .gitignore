@@ -1,0 +1,13 @@
+.DS_Store
+.build/
+.swiftpm/
+
+DerivedData/
+*.xcresult
+
+# Xcode user state
+*.xcodeproj/xcuserdata/
+*.xcodeproj/project.xcworkspace/xcuserdata/
+*.xcuserstate
+xcschememanagement.plist
+*.xcodeproj/project.xcworkspace/xcuserdata/**/UserInterfaceState.xcuserstate
