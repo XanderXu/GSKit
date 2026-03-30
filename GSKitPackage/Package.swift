@@ -6,6 +6,7 @@ let package = Package(
     name: "GSKit",
     platforms: [
         .macOS("26.0"),
+        .visionOS("2.0")
     ],
     products: [
         .library(name: "GSKit", targets: ["GSKit"]),
