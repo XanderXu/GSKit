@@ -6,12 +6,16 @@
 //
 
 import SwiftUI
+import GSKit
 
 @main
 struct GSKit_visionOSApp: App {
 
     @State private var appModel = AppModel()
 
+    init() {
+        GSKitRuntime.registerSystems()
+    }
     var body: some Scene {
         WindowGroup {
             ContentView()

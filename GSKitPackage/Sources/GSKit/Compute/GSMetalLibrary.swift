@@ -8,6 +8,7 @@ import Metal
 import Dispatch
 
 @available(macOS 26.0, *)
+@available(visionOS 2.0, *)
 enum GSMetalLibrary {
     private final class BundleToken {}
     private static let resourceBundleName = "GSKit_GSKit"

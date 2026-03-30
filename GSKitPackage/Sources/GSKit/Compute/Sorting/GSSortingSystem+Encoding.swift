@@ -65,7 +65,11 @@ extension GSSortingSystem {
             countEncoder.setComputePipelineState(job.radixCountPipeline)
             countEncoder.setBuffer(currentSourceBuffer, offset: 0, index: 0)
             countEncoder.setBuffer(job.histogramBuffer, offset: 0, index: 1)
-            countEncoder.setBuffer(job.radixPassParamsBuffer, offset: passOffset, index: 2)
+            countEncoder.setBytes(
+                job.radixPassParamsBuffer.contents() + passOffset,
+                length: MemoryLayout<RadixPassKernelParams>.stride,
+                index: 2
+            )
             countEncoder.dispatchThreadgroups(countGroups, threadsPerThreadgroup: threadsPerThreadgroup)
             countEncoder.endEncoding()
 
@@ -86,7 +90,11 @@ extension GSSortingSystem {
             scatterEncoder.setBuffer(currentSourceBuffer, offset: 0, index: 0)
             scatterEncoder.setBuffer(currentDestBuffer, offset: 0, index: 1)
             scatterEncoder.setBuffer(job.histogramBuffer, offset: 0, index: 2)
-            scatterEncoder.setBuffer(job.radixPassParamsBuffer, offset: passOffset, index: 3)
+            scatterEncoder.setBytes(
+                job.radixPassParamsBuffer.contents() + passOffset,
+                length: MemoryLayout<RadixPassKernelParams>.stride,
+                index: 3
+            )
             scatterEncoder.dispatchThreadgroups(countGroups, threadsPerThreadgroup: threadsPerThreadgroup)
             scatterEncoder.endEncoding()
 
