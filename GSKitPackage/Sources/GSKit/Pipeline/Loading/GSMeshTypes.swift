@@ -4,6 +4,8 @@ import RealityKit
 import simd
 
 @available(macOS 26.0, *)
+@available(visionOS 2.0, *)
+
 struct GSMeshBuildResult: @unchecked Sendable {
     let vertexData: Data
     let indexData: Data
@@ -15,6 +17,8 @@ struct GSMeshBuildResult: @unchecked Sendable {
 }
 
 @available(macOS 26.0, *)
+@available(visionOS 2.0, *)
+
 struct GSSplatData {
     let position: SIMD3<Float>
     let axisU: SIMD3<Float>
@@ -24,6 +28,8 @@ struct GSSplatData {
 }
 
 @available(macOS 26.0, *)
+@available(visionOS 2.0, *)
+
 struct GSMeshVertex {
     var px: Float
     var py: Float
@@ -37,6 +43,8 @@ struct GSMeshVertex {
 }
 
 @available(macOS 26.0, *)
+@available(visionOS 2.0, *)
+
 struct GSQuadMeshBuffers {
     let vertexData: Data
     let indexData: Data

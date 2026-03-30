@@ -4,6 +4,8 @@ import RealityKit
 import simd
 
 @available(macOS 26.0, *)
+@available(visionOS 2.0, *)
+
 extension GSSortingSystem {
     func currentRenderBudgetRatio(for entityID: ObjectIdentifier) -> Float {
         let minRatio = min(Self.minRenderBudgetRatio, Self.maxRenderBudgetRatio)
@@ -416,6 +418,8 @@ extension GSSortingSystem {
 }
 
 @available(macOS 26.0, *)
+@available(visionOS 2.0, *)
+
 extension GSSortingSystem {
     struct UnsafeReadablePointer<Pointee>: @unchecked Sendable {
         let pointer: UnsafePointer<Pointee>

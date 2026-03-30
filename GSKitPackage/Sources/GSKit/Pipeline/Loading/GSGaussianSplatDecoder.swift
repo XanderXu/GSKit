@@ -2,6 +2,8 @@ import Foundation
 import simd
 
 @available(macOS 26.0, *)
+@available(visionOS 2.0, *)
+
 enum GSGaussianSplatDecoder {
     static func decode(
         from ply: GSPLYFile,

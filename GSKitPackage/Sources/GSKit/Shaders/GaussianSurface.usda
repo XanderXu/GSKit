@@ -1,0 +1,169 @@
+#usda 1.0
+(
+    customLayerData = {
+        string creator = "Reality Composer Pro Version 2.0 (494.60.2)"
+    }
+    defaultPrim = "Root"
+    metersPerUnit = 1
+    upAxis = "Y"
+)
+
+def Xform "Root"
+{
+    def Material "Material"
+    {
+        token cullMode = "none" (
+            allowedTokens = ["unspecified", "none", "front", "back"]
+        )
+        token outputs:mtlx:surface.connect = </Root/Material/UnlitSurface.outputs:out>
+        token outputs:realitykit:vertex
+        float2 ui:nodegraph:realitykit:subgraphOutputs:pos = (683.5664, 123.390625)
+        int ui:nodegraph:realitykit:subgraphOutputs:stackingOrder = 85
+
+        def Shader "TextureCoordinates"
+        {
+            uniform token info:id = "ND_texcoord_vector2"
+            float2 outputs:out
+            float2 ui:nodegraph:node:pos = (-610.5652, -28.371904)
+            int ui:nodegraph:node:stackingOrder = 263
+        }
+
+        def Shader "DotProduct"
+        {
+            uniform token info:id = "ND_dotproduct_vector2"
+            float2 inputs:in1.connect = </Root/Material/TextureCoordinates.outputs:out>
+            float2 inputs:in2.connect = </Root/Material/TextureCoordinates.outputs:out>
+            float outputs:out
+            float2 ui:nodegraph:node:pos = (-326.3789, -24.386719)
+            int ui:nodegraph:node:stackingOrder = 33
+        }
+
+        def Shader "GeometryColor"
+        {
+            uniform token info:id = "ND_geomcolor_color4"
+            color4f outputs:out
+            float2 ui:nodegraph:node:pos = (-768.32196, 274.80298)
+            int ui:nodegraph:node:stackingOrder = 244
+        }
+
+        def Shader "Separate4"
+        {
+            uniform token info:id = "ND_separate4_color4"
+            color4f inputs:in.connect = </Root/Material/GeometryColor.outputs:out>
+            float outputs:outa
+            float outputs:outb
+            float outputs:outg
+            float outputs:outr
+            float2 ui:nodegraph:node:pos = (-560.9144, 279.4614)
+            int ui:nodegraph:node:stackingOrder = 229
+        }
+
+        def Shader "Max"
+        {
+            uniform token info:id = "ND_max_float"
+            float inputs:in1.connect = </Root/Material/Separate4.outputs:outa>
+            float inputs:in2 = 0.0001
+            float outputs:out
+            float2 ui:nodegraph:node:pos = (-318.29642, 311.1286)
+            int ui:nodegraph:node:stackingOrder = 198
+        }
+
+        def Shader "Combine3"
+        {
+            uniform token info:id = "ND_combine3_color3"
+            float inputs:in1.connect = </Root/Material/Separate4.outputs:outr>
+            float inputs:in2.connect = </Root/Material/Separate4.outputs:outg>
+            float inputs:in3.connect = </Root/Material/Separate4.outputs:outb>
+            color3f outputs:out
+            float2 ui:nodegraph:node:pos = (-328.0425, 226.7536)
+            int ui:nodegraph:node:stackingOrder = 198
+        }
+
+        def Shader "Divide"
+        {
+            uniform token info:id = "ND_divide_color3FA"
+            prepend color3f inputs:in1.connect = </Root/Material/Combine3.outputs:out>
+            float inputs:in2.connect = </Root/Material/Max.outputs:out>
+            color3f outputs:out
+            float2 ui:nodegraph:node:pos = (-210.47612, 259.80048)
+            int ui:nodegraph:node:stackingOrder = 198
+        }
+
+        def Shader "Clamp"
+        {
+            uniform token info:id = "ND_clamp_color3"
+            color3f inputs:high
+            color3f inputs:in.connect = </Root/Material/Divide.outputs:out>
+            color3f outputs:out
+            float2 ui:nodegraph:node:pos = (-41.301, 290.2109)
+            int ui:nodegraph:node:stackingOrder = 205
+        }
+
+        def Shader "IfGreater"
+        {
+            uniform token info:id = "ND_ifgreater_float"
+            float inputs:in1
+            float inputs:in2.connect = </Root/Material/Exp.outputs:out>
+            float inputs:value1.connect = </Root/Material/DotProduct.outputs:out>
+            float inputs:value2 = 6.25
+            float outputs:out
+            float2 ui:nodegraph:node:pos = (77.50391, -47.429688)
+            int ui:nodegraph:node:stackingOrder = 252
+        }
+
+        def Shader "Exp"
+        {
+            uniform token info:id = "ND_exp_float"
+            float inputs:in.connect = </Root/Material/Multiply.outputs:out>
+            float outputs:out
+            float2 ui:nodegraph:node:pos = (-66.97656, 45.82422)
+            int ui:nodegraph:node:stackingOrder = 239
+        }
+
+        def Shader "Multiply"
+        {
+            uniform token info:id = "ND_multiply_float"
+            float inputs:in1.connect = </Root/Material/DotProduct.outputs:out>
+            float inputs:in2 = -0.5
+            float outputs:out
+            float2 ui:nodegraph:node:pos = (-178.26953, 23.507812)
+            int ui:nodegraph:node:stackingOrder = 99
+        }
+
+        def Shader "Multiply_1"
+        {
+            uniform token info:id = "ND_multiply_float"
+            float inputs:in1.connect = </Root/Material/IfGreater.outputs:out>
+            float inputs:in2 = 0
+            float inputs:in2.connect = </Root/Material/Separate4.outputs:outa>
+            float outputs:out
+            float2 ui:nodegraph:node:pos = (148.0399, 102.48391)
+            int ui:nodegraph:node:stackingOrder = 241
+        }
+
+        def Shader "Clamp_1"
+        {
+            uniform token info:id = "ND_clamp_float"
+            float inputs:high
+            float inputs:in.connect = </Root/Material/Multiply_1.outputs:out>
+            float inputs:low
+            float outputs:out
+            float2 ui:nodegraph:node:pos = (259.1177, 53.029984)
+            int ui:nodegraph:node:stackingOrder = 255
+        }
+
+        def Shader "UnlitSurface"
+        {
+            uniform token info:id = "ND_realitykit_unlit_surfaceshader"
+            bool inputs:applyPostProcessToneMap = 0
+            color3f inputs:color.connect = </Root/Material/Clamp.outputs:out>
+            bool inputs:hasPremultipliedAlpha = 0
+            float inputs:opacity.connect = </Root/Material/Clamp_1.outputs:out>
+            float inputs:opacityThreshold
+            token outputs:out
+            float2 ui:nodegraph:node:pos = (446.94812, 180.4188)
+            int ui:nodegraph:node:stackingOrder = 236
+        }
+    }
+}
+

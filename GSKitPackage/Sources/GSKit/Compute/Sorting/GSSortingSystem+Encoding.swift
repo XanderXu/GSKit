@@ -3,6 +3,8 @@ import RealityKit
 import simd
 
 @available(macOS 26.0, *)
+@available(visionOS 2.0, *)
+
 extension GSSortingSystem {
     static func encodeAndCommitSortBatch(_ sorts: [PreparedSort]) {
         guard !sorts.isEmpty,
@@ -105,6 +107,8 @@ extension GSSortingSystem {
 }
 
 @available(macOS 26.0, *)
+@available(visionOS 2.0, *)
+
 extension GSSortingSystem {
     struct DepthKernelParams {
         var cameraLocalPos: SIMD4<Float>

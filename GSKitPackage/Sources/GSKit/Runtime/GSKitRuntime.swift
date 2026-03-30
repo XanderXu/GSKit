@@ -1,6 +1,7 @@
 import RealityKit
 
 @available(macOS 26.0, *)
+@available(visionOS 2.0, *)
 public enum GSKitRuntime {
     @MainActor
     public static func registerSystems() {

@@ -1,6 +1,8 @@
 import RealityKit
 
 @available(macOS 26.0, *)
+@available(visionOS 2.0, *)
+
 @MainActor
 enum GSLowLevelMeshFactory {
     static func makeMesh(from data: GSMeshBuildResult) throws -> LowLevelMesh {

@@ -4,6 +4,8 @@ import RealityKit
 import simd
 
 @available(macOS 26.0, *)
+@available(visionOS 2.0, *)
+
 @MainActor
 final class GSSortingSystem: System {
     static let splatQuery = EntityQuery(where: .has(GSSortComponent.self) && .has(GSModelDataComponent.self))

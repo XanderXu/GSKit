@@ -2,6 +2,8 @@ import RealityKit
 import simd
 
 @available(macOS 26.0, *)
+@available(visionOS 2.0, *)
+
 struct GSCameraState {
     private static let cameraQuery = EntityQuery(where: .has(PerspectiveCameraComponent.self))
 
@@ -42,12 +44,16 @@ struct GSCameraState {
 }
 
 @available(macOS 26.0, *)
+@available(visionOS 2.0, *)
+
 struct GSLocalCameraState {
     let position: SIMD3<Float>
     let forward: SIMD3<Float>
 }
 
 @available(macOS 26.0, *)
+@available(visionOS 2.0, *)
+
 @MainActor
 enum GSModelEntityResolver {
     static func resolve(for entity: Entity) -> Entity {

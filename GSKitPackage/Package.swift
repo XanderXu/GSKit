@@ -14,7 +14,10 @@ let package = Package(
         .target(
             name: "GSKit",
             dependencies: [],
-            path: "Sources/GSKit"
+            path: "Sources/GSKit",
+            resources: [
+                .process("Shaders/GaussianSurface.usda"),
+            ]
         ),
     ]
 )

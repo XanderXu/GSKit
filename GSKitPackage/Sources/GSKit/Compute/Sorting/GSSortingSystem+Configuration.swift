@@ -1,6 +1,8 @@
 import Foundation
 
 @available(macOS 26.0, *)
+@available(visionOS 2.0, *)
+
 extension GSSortingSystem {
     nonisolated static let radixShifts: [UInt32] = [0, 8, 16]
     nonisolated static let minAdaptiveRadixPassCount = 2

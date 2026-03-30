@@ -3,6 +3,7 @@ import RealityKit
 import simd
 
 @available(macOS 26.0, *)
+@available(visionOS 2.0, *)
 @MainActor
 enum GSEntityLoader {
     static func load(url: URL) async throws -> GSEntity {
@@ -24,7 +25,11 @@ enum GSEntityLoader {
 
         let lowLevelMesh = try GSLowLevelMeshFactory.makeMesh(from: meshData)
         let meshResource = try await MeshResource(from: lowLevelMesh)
-        let gaussianMaterial = try GSGaussianMaterialFactory.makeGaussianMaterial(device: device)
+//        let gaussianMaterial = try GSGaussianMaterialFactory.makeGaussianMaterial(device: device)
+        var gaussianMaterial: ShaderGraphMaterial = try await ShaderGraphMaterial(named: "/Root/Material", from: "GaussianSurface.usda", in: .module)
+        gaussianMaterial.faceCulling = .none
+        gaussianMaterial.readsDepth = true
+        gaussianMaterial.writesDepth = false
         let modelEntity = ModelEntity(mesh: meshResource, materials: [gaussianMaterial])
         modelEntity.transform.rotation = simd_quatf(angle: .pi, axis: SIMD3<Float>(1, 0, 0))
 

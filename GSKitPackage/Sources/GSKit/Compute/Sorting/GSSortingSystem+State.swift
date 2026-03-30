@@ -4,6 +4,8 @@ import RealityKit
 import simd
 
 @available(macOS 26.0, *)
+@available(visionOS 2.0, *)
+
 extension GSSortingSystem {
     func cleanupBufferCaches(activeEntityIDs: Set<ObjectIdentifier>) {
         let allKeys = Set(sortBuffersA.keys)
@@ -338,6 +340,8 @@ extension GSSortingSystem {
 }
 
 @available(macOS 26.0, *)
+@available(visionOS 2.0, *)
+
 extension GSSortingSystem {
     struct LocalBounds {
         let center: SIMD3<Float>

@@ -3,6 +3,8 @@ import RealityKit
 import simd
 
 @available(macOS 26.0, *)
+@available(visionOS 2.0, *)
+
 enum GSQuadMeshWriter {
     static func encode(
         splats: [GSSplatData],

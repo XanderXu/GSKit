@@ -4,6 +4,8 @@ import RealityKit
 import simd
 
 @available(macOS 26.0, *)
+@available(visionOS 2.0, *)
+
 enum GSMeshBuilder {
     static let device = MTLCreateSystemDefaultDevice()
     private static let maxRenderableSplats: Int = envInt("GSKIT_MAX_SPLATS", defaultValue: 0)

@@ -7,6 +7,7 @@ import Foundation
 import RealityKit
 
 @available(macOS 26.0, *)
+@available(visionOS 2.0, *)
 @MainActor
 public final class GSEntity: Entity {
     public let sourceURL: URL
