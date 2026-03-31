@@ -20,10 +20,10 @@ struct ImmersiveView: View {
             let root = Entity()
             root.name = "GSRoot"
 
-            let cameraAnchor = AnchorEntity(world: SIMD3<Float>(0, 0, 3))
+            let cameraAnchor = AnchorEntity(.head, trackingMode: .continuous)
             var cameraComp = PerspectiveCameraComponent()
             cameraComp.near = 0.05
-            cameraComp.far = 150.0
+            cameraComp.far = 100.0
             cameraAnchor.components.set(cameraComp)
             root.addChild(cameraAnchor)
 
@@ -61,6 +61,8 @@ struct ImmersiveView: View {
             let entity = try await GSEntity.load(url: Bundle.main.url(forResource: "IMG_9738", withExtension: "ply")!)
             guard !Task.isCancelled else { return }
             modelEntity = entity
+//            modelEntity?.position = SIMD3<Float>(0, 1, 0)
+//            modelEntity?.scale = SIMD3<Float>(0.01, 0.01, 0.01)
             loadState = .loaded
         } catch {
             guard !Task.isCancelled else { return }
