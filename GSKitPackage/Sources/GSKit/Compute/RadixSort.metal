@@ -39,8 +39,9 @@ struct GSRadixScanParams {
 
 struct GSWriteIndicesParams {
     uint activeCount;
-    uint totalCount;
-    uint2 padding;
+    uint padding0;
+    uint padding1;
+    uint padding2;
 };
 
 #define GS_DEPTH_KEY_MASK 0x00FFFFFFu
@@ -257,27 +258,15 @@ kernel void gskit_write_indices(
     constant GSWriteIndicesParams &params [[buffer(2)]],
     uint tid [[thread_position_in_grid]])
 {
-    if (tid >= params.totalCount) return;
+    if (tid >= params.activeCount) return;
 
     uint writePos = tid * 6;
-
-    if (tid < params.activeCount) {
-        uint splatIndex = sortedEntries[tid].y;
-        uint v0 = splatIndex * 4;
-        outIndices[writePos + 0] = v0 + 0;
-        outIndices[writePos + 1] = v0 + 1;
-        outIndices[writePos + 2] = v0 + 2;
-        outIndices[writePos + 3] = v0 + 0;
-        outIndices[writePos + 4] = v0 + 2;
-        outIndices[writePos + 5] = v0 + 3;
-    } else {
-        // Emit degenerate triangles for inactive slots so they contribute no rasterized area.
-        uint v = tid * 4;
-        outIndices[writePos + 0] = v;
-        outIndices[writePos + 1] = v;
-        outIndices[writePos + 2] = v;
-        outIndices[writePos + 3] = v;
-        outIndices[writePos + 4] = v;
-        outIndices[writePos + 5] = v;
-    }
+    uint splatIndex = sortedEntries[tid].y;
+    uint v0 = splatIndex * 4;
+    outIndices[writePos + 0] = v0 + 0;
+    outIndices[writePos + 1] = v0 + 1;
+    outIndices[writePos + 2] = v0 + 2;
+    outIndices[writePos + 3] = v0 + 0;
+    outIndices[writePos + 4] = v0 + 2;
+    outIndices[writePos + 5] = v0 + 3;
 }

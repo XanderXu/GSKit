@@ -27,7 +27,7 @@ enum GSEntityLoader {
         let meshResource = try await MeshResource(from: lowLevelMesh)
 //        let gaussianMaterial = try GSGaussianMaterialFactory.makeGaussianMaterial(device: device)
         var gaussianMaterial: ShaderGraphMaterial = try await ShaderGraphMaterial(named: "/Root/Material", from: "GaussianSurface.usda", in: .module)
-        gaussianMaterial.faceCulling = .none
+        gaussianMaterial.faceCulling = .back
         gaussianMaterial.readsDepth = true
         gaussianMaterial.writesDepth = false
         let modelEntity = ModelEntity(mesh: meshResource, materials: [gaussianMaterial])

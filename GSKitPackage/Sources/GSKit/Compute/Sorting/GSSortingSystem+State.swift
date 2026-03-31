@@ -13,10 +13,6 @@ extension GSSortingSystem {
             .union(visibleIndexBuffers.keys)
             .union(visibleIndexIdentityCountCache.keys)
             .union(histogramBuffers.keys)
-            .union(depthParamsBuffers.keys)
-            .union(radixPassParamsBuffers.keys)
-            .union(scanParamsBuffers.keys)
-            .union(writeParamsBuffers.keys)
             .union(renderableSplatCountCache.keys)
             .union(activeVisibleCountCache.keys)
             .union(renderBudgetRatioCache.keys)
@@ -33,10 +29,6 @@ extension GSSortingSystem {
             visibleIndexBuffers.removeValue(forKey: key)
             visibleIndexIdentityCountCache.removeValue(forKey: key)
             histogramBuffers.removeValue(forKey: key)
-            depthParamsBuffers.removeValue(forKey: key)
-            radixPassParamsBuffers.removeValue(forKey: key)
-            scanParamsBuffers.removeValue(forKey: key)
-            writeParamsBuffers.removeValue(forKey: key)
             localBoundsCache.removeValue(forKey: key)
             radixPassStateCache.removeValue(forKey: key)
             cullThresholdCache.removeValue(forKey: key)
@@ -226,31 +218,7 @@ extension GSSortingSystem {
             return nil
         }
 
-        guard let depthParamsBuffer = getOrMakeBuffer(
-            from: &depthParamsBuffers,
-            entityID: entityID,
-            size: MemoryLayout<DepthKernelParams>.stride,
-            options: .storageModeShared
-        ), let radixPassParamsBuffer = getOrMakeBuffer(
-            from: &radixPassParamsBuffers,
-            entityID: entityID,
-            size: MemoryLayout<RadixPassKernelParams>.stride * Self.radixShifts.count,
-            options: .storageModeShared
-        ), let scanParamsBuffer = getOrMakeBuffer(
-            from: &scanParamsBuffers,
-            entityID: entityID,
-            size: MemoryLayout<RadixScanKernelParams>.stride,
-            options: .storageModeShared
-        ), let writeParamsBuffer = getOrMakeBuffer(
-            from: &writeParamsBuffers,
-            entityID: entityID,
-            size: MemoryLayout<WriteIndicesKernelParams>.stride,
-            options: .storageModeShared
-        ) else {
-            return nil
-        }
-
-        var depthParams = DepthKernelParams(
+        let depthParams = DepthKernelParams(
             cameraLocalPos: SIMD4<Float>(localCameraPos.x, localCameraPos.y, localCameraPos.z, 0),
             cameraLocalForward: SIMD4<Float>(localCameraForward.x, localCameraForward.y, localCameraForward.z, 0),
             count: UInt32(activeCount),
@@ -258,12 +226,11 @@ extension GSSortingSystem {
             padding0: 0,
             padding1: 0
         )
-        memcpy(depthParamsBuffer.contents(), &depthParams, MemoryLayout<DepthKernelParams>.stride)
 
-        var passParams: [RadixPassKernelParams] = []
-        passParams.reserveCapacity(Self.radixShifts.count)
+        var radixPassParams: [RadixPassKernelParams] = []
+        radixPassParams.reserveCapacity(Self.radixShifts.count)
         for shift in Self.radixShifts {
-            passParams.append(
+            radixPassParams.append(
                 RadixPassKernelParams(
                     paddedCount: UInt32(activePaddedCount),
                     shift: shift,
@@ -272,26 +239,20 @@ extension GSSortingSystem {
                 )
             )
         }
-        passParams.withUnsafeBytes { raw in
-            guard let base = raw.baseAddress else { return }
-            memcpy(radixPassParamsBuffer.contents(), base, raw.count)
-        }
 
-        var scanParams = RadixScanKernelParams(
+        let scanParams = RadixScanKernelParams(
             numGroups: UInt32(activeNumGroups),
             padding0: 0,
             padding1: 0,
             padding2: 0
         )
-        memcpy(scanParamsBuffer.contents(), &scanParams, MemoryLayout<RadixScanKernelParams>.stride)
 
-        var writeParams = WriteIndicesKernelParams(
+        let writeParams = WriteIndicesKernelParams(
             activeCount: UInt32(activeCount),
-            totalCount: UInt32(totalCount),
             padding0: 0,
-            padding1: 0
+            padding1: 0,
+            padding2: 0
         )
-        memcpy(writeParamsBuffer.contents(), &writeParams, MemoryLayout<WriteIndicesKernelParams>.stride)
 
         let job = SortDispatchJob(
             commandQueue: commandQueue,
@@ -305,11 +266,10 @@ extension GSSortingSystem {
             sortBufferA: sortBufferA,
             sortBufferB: sortBufferB,
             histogramBuffer: histogramBuffer,
-            depthParamsBuffer: depthParamsBuffer,
-            radixPassParamsBuffer: radixPassParamsBuffer,
-            scanParamsBuffer: scanParamsBuffer,
-            writeParamsBuffer: writeParamsBuffer,
-            totalCount: totalCount,
+            depthParams: depthParams,
+            radixPassParams: radixPassParams,
+            scanParams: scanParams,
+            writeParams: writeParams,
             activeCount: activeCount,
             numGroups: activeNumGroups,
             radixPassCount: stabilizedPassCount

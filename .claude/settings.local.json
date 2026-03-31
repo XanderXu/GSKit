@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(xcodebuild -project DemoApp/GSKit.xcodeproj -scheme GSKit -destination 'platform=visionOS Simulator,name=Apple Vision Pro' build)",
+      "Bash(xcodebuild -project DemoApp/GSKit.xcodeproj -scheme GSKit -destination 'platform=visionOS Simulator,name=Apple Vision Pro,OS=26.2' build)"
+    ]
+  }
+}

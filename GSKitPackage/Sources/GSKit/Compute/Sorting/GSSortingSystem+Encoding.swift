@@ -37,79 +37,66 @@ extension GSSortingSystem {
         let threadGroupSize = 256
         let threadsPerThreadgroup = MTLSize(width: threadGroupSize, height: 1, depth: 1)
         let countGroups = MTLSize(width: job.numGroups, height: 1, depth: 1)
-        let finalCountsGroup = MTLSize(
-            width: (job.totalCount + threadGroupSize - 1) / threadGroupSize,
-            height: 1,
-            depth: 1
-        )
+        let writeGroupCount = max(1, (job.activeCount + threadGroupSize - 1) / threadGroupSize)
+        let writeGroups = MTLSize(width: writeGroupCount, height: 1, depth: 1)
 
-        guard let depthEncoder = commandBuffer.makeComputeCommandEncoder() else { return false }
-        depthEncoder.label = "GSKit Direct Depth Pass"
-        depthEncoder.setComputePipelineState(job.depthPipeline)
-        depthEncoder.setBuffer(job.positionBuffer, offset: 0, index: 0)
-        depthEncoder.setBuffer(job.visibleIndicesBuffer, offset: 0, index: 1)
-        depthEncoder.setBuffer(job.sortBufferA, offset: 0, index: 2)
-        depthEncoder.setBuffer(job.depthParamsBuffer, offset: 0, index: 3)
-        depthEncoder.dispatchThreadgroups(countGroups, threadsPerThreadgroup: threadsPerThreadgroup)
-        depthEncoder.endEncoding()
+        guard let encoder = commandBuffer.makeComputeCommandEncoder() else { return false }
+        encoder.label = "GSKit Sort Pipeline"
 
+        // --- Depth Pass ---
+        encoder.setComputePipelineState(job.depthPipeline)
+        encoder.setBuffer(job.positionBuffer, offset: 0, index: 0)
+        encoder.setBuffer(job.visibleIndicesBuffer, offset: 0, index: 1)
+        encoder.setBuffer(job.sortBufferA, offset: 0, index: 2)
+        var depthParams = job.depthParams
+        encoder.setBytes(&depthParams, length: MemoryLayout<DepthKernelParams>.stride, index: 3)
+        encoder.dispatchThreadgroups(countGroups, threadsPerThreadgroup: threadsPerThreadgroup)
+
+        // --- Radix Sort Passes ---
         var currentSourceBuffer = job.sortBufferA
         var currentDestBuffer = job.sortBufferB
         let passCount = max(minAdaptiveRadixPassCount, min(job.radixPassCount, radixShifts.count))
 
         for pass in 0..<passCount {
-            let passOffset = pass * MemoryLayout<RadixPassKernelParams>.stride
+            // Count
+            encoder.setComputePipelineState(job.radixCountPipeline)
+            encoder.setBuffer(currentSourceBuffer, offset: 0, index: 0)
+            encoder.setBuffer(job.histogramBuffer, offset: 0, index: 1)
+            var passParams = job.radixPassParams[pass]
+            encoder.setBytes(&passParams, length: MemoryLayout<RadixPassKernelParams>.stride, index: 2)
+            encoder.dispatchThreadgroups(countGroups, threadsPerThreadgroup: threadsPerThreadgroup)
 
-            guard let countEncoder = commandBuffer.makeComputeCommandEncoder() else { return false }
-            countEncoder.label = "GSKit Direct Radix Count"
-            countEncoder.setComputePipelineState(job.radixCountPipeline)
-            countEncoder.setBuffer(currentSourceBuffer, offset: 0, index: 0)
-            countEncoder.setBuffer(job.histogramBuffer, offset: 0, index: 1)
-            countEncoder.setBytes(
-                job.radixPassParamsBuffer.contents() + passOffset,
-                length: MemoryLayout<RadixPassKernelParams>.stride,
-                index: 2
-            )
-            countEncoder.dispatchThreadgroups(countGroups, threadsPerThreadgroup: threadsPerThreadgroup)
-            countEncoder.endEncoding()
-
-            guard let scanEncoder = commandBuffer.makeComputeCommandEncoder() else { return false }
-            scanEncoder.label = "GSKit Direct Radix Scan"
-            scanEncoder.setComputePipelineState(job.radixScanPipeline)
-            scanEncoder.setBuffer(job.histogramBuffer, offset: 0, index: 0)
-            scanEncoder.setBuffer(job.scanParamsBuffer, offset: 0, index: 1)
-            scanEncoder.dispatchThreadgroups(
+            // Scan
+            encoder.setComputePipelineState(job.radixScanPipeline)
+            encoder.setBuffer(job.histogramBuffer, offset: 0, index: 0)
+            var scanParams = job.scanParams
+            encoder.setBytes(&scanParams, length: MemoryLayout<RadixScanKernelParams>.stride, index: 1)
+            encoder.dispatchThreadgroups(
                 MTLSize(width: 1, height: 1, depth: 1),
                 threadsPerThreadgroup: threadsPerThreadgroup
             )
-            scanEncoder.endEncoding()
 
-            guard let scatterEncoder = commandBuffer.makeComputeCommandEncoder() else { return false }
-            scatterEncoder.label = "GSKit Direct Radix Scatter"
-            scatterEncoder.setComputePipelineState(job.radixScatterPipeline)
-            scatterEncoder.setBuffer(currentSourceBuffer, offset: 0, index: 0)
-            scatterEncoder.setBuffer(currentDestBuffer, offset: 0, index: 1)
-            scatterEncoder.setBuffer(job.histogramBuffer, offset: 0, index: 2)
-            scatterEncoder.setBytes(
-                job.radixPassParamsBuffer.contents() + passOffset,
-                length: MemoryLayout<RadixPassKernelParams>.stride,
-                index: 3
-            )
-            scatterEncoder.dispatchThreadgroups(countGroups, threadsPerThreadgroup: threadsPerThreadgroup)
-            scatterEncoder.endEncoding()
+            // Scatter
+            encoder.setComputePipelineState(job.radixScatterPipeline)
+            encoder.setBuffer(currentSourceBuffer, offset: 0, index: 0)
+            encoder.setBuffer(currentDestBuffer, offset: 0, index: 1)
+            encoder.setBuffer(job.histogramBuffer, offset: 0, index: 2)
+            var scatterParams = job.radixPassParams[pass]
+            encoder.setBytes(&scatterParams, length: MemoryLayout<RadixPassKernelParams>.stride, index: 3)
+            encoder.dispatchThreadgroups(countGroups, threadsPerThreadgroup: threadsPerThreadgroup)
 
             swap(&currentSourceBuffer, &currentDestBuffer)
         }
 
-        guard let writeEncoder = commandBuffer.makeComputeCommandEncoder() else { return false }
-        writeEncoder.label = "GSKit Direct Write Indices"
-        writeEncoder.setComputePipelineState(job.writeIndicesPipeline)
-        writeEncoder.setBuffer(currentSourceBuffer, offset: 0, index: 0)
-        writeEncoder.setBuffer(destinationIndexBuffer, offset: 0, index: 1)
-        writeEncoder.setBuffer(job.writeParamsBuffer, offset: 0, index: 2)
-        writeEncoder.dispatchThreadgroups(finalCountsGroup, threadsPerThreadgroup: threadsPerThreadgroup)
-        writeEncoder.endEncoding()
+        // --- Write Indices ---
+        encoder.setComputePipelineState(job.writeIndicesPipeline)
+        encoder.setBuffer(currentSourceBuffer, offset: 0, index: 0)
+        encoder.setBuffer(destinationIndexBuffer, offset: 0, index: 1)
+        var writeParams = job.writeParams
+        encoder.setBytes(&writeParams, length: MemoryLayout<WriteIndicesKernelParams>.stride, index: 2)
+        encoder.dispatchThreadgroups(writeGroups, threadsPerThreadgroup: threadsPerThreadgroup)
 
+        encoder.endEncoding()
         return true
     }
 }
@@ -143,9 +130,9 @@ extension GSSortingSystem {
 
     struct WriteIndicesKernelParams {
         var activeCount: UInt32
-        var totalCount: UInt32
         var padding0: UInt32
         var padding1: UInt32
+        var padding2: UInt32
     }
 
     struct PreparedSort: @unchecked Sendable {
@@ -175,11 +162,10 @@ extension GSSortingSystem {
         let sortBufferA: MTLBuffer
         let sortBufferB: MTLBuffer
         let histogramBuffer: MTLBuffer
-        let depthParamsBuffer: MTLBuffer
-        let radixPassParamsBuffer: MTLBuffer
-        let scanParamsBuffer: MTLBuffer
-        let writeParamsBuffer: MTLBuffer
-        let totalCount: Int
+        let depthParams: DepthKernelParams
+        let radixPassParams: [RadixPassKernelParams]
+        let scanParams: RadixScanKernelParams
+        let writeParams: WriteIndicesKernelParams
         let activeCount: Int
         let numGroups: Int
         let radixPassCount: Int
