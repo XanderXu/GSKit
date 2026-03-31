@@ -128,102 +128,6 @@ extension GSSortingSystem {
         return bounds
     }
 
-    func compactVisibleSplats(
-        positionBuffer: MTLBuffer,
-        count: Int,
-        localCameraPos: SIMD3<Float>,
-        localCameraForward: SIMD3<Float>,
-        cullThreshold: Float,
-        outputVisibleIndices: MTLBuffer
-    ) -> Int {
-        guard count > 0 else { return 0 }
-        return Self.compactVisibleSplatsParallel(
-            positionBuffer: positionBuffer,
-            count: count,
-            localCameraPos: localCameraPos,
-            localCameraForward: localCameraForward,
-            cullThreshold: cullThreshold,
-            outputVisibleIndices: outputVisibleIndices
-        )
-    }
-
-    nonisolated static func compactVisibleSplatsParallel(
-        positionBuffer: MTLBuffer,
-        count: Int,
-        localCameraPos: SIMD3<Float>,
-        localCameraForward: SIMD3<Float>,
-        cullThreshold: Float,
-        outputVisibleIndices: MTLBuffer
-    ) -> Int {
-        let positions = positionBuffer.contents().bindMemory(to: SIMD3<Float>.self, capacity: count)
-        let visibleIndices = outputVisibleIndices.contents().bindMemory(to: UInt32.self, capacity: count)
-        let chunkSize = max(1, Self.compactionWorkChunkSize)
-        let chunkCount = max(1, (count + chunkSize - 1) / chunkSize)
-        let visibilityFlags = UnsafeMutablePointer<UInt8>.allocate(capacity: count)
-        visibilityFlags.initialize(repeating: 0, count: count)
-        defer {
-            visibilityFlags.deinitialize(count: count)
-            visibilityFlags.deallocate()
-        }
-
-        let positionsRef = UnsafeReadablePointer(pointer: UnsafePointer(positions))
-        let visibleIndicesRef = UnsafeWritablePointer(pointer: visibleIndices)
-        let visibilityFlagsRef = UnsafeWritablePointer(pointer: visibilityFlags)
-
-        let chunkVisibleCounts = UnsafeMutablePointer<Int>.allocate(capacity: chunkCount)
-        chunkVisibleCounts.initialize(repeating: 0, count: chunkCount)
-        defer {
-            chunkVisibleCounts.deinitialize(count: chunkCount)
-            chunkVisibleCounts.deallocate()
-        }
-        let chunkVisibleCountsRef = UnsafeWritablePointer(pointer: chunkVisibleCounts)
-
-        DispatchQueue.concurrentPerform(iterations: chunkCount) { chunk in
-            let start = chunk * chunkSize
-            let end = min(start + chunkSize, count)
-            var localCount = 0
-
-            for splatIndex in start..<end where isSplatVisible(
-                positionsRef.pointer[splatIndex],
-                localCameraPos: localCameraPos,
-                localCameraForward: localCameraForward,
-                cullThreshold: cullThreshold
-            ) {
-                visibilityFlagsRef.pointer[splatIndex] = 1
-                localCount += 1
-            }
-
-            chunkVisibleCountsRef.pointer[chunk] = localCount
-        }
-
-        let chunkWriteOffsets = UnsafeMutablePointer<Int>.allocate(capacity: chunkCount)
-        chunkWriteOffsets.initialize(repeating: 0, count: chunkCount)
-        defer {
-            chunkWriteOffsets.deinitialize(count: chunkCount)
-            chunkWriteOffsets.deallocate()
-        }
-
-        var visibleCount = 0
-        for chunk in 0..<chunkCount {
-            chunkWriteOffsets[chunk] = visibleCount
-            visibleCount += chunkVisibleCounts[chunk]
-        }
-        let chunkWriteOffsetsRef = UnsafeReadablePointer(pointer: UnsafePointer(chunkWriteOffsets))
-
-        DispatchQueue.concurrentPerform(iterations: chunkCount) { chunk in
-            let start = chunk * chunkSize
-            let end = min(start + chunkSize, count)
-            var writeIndex = chunkWriteOffsetsRef.pointer[chunk]
-
-            for splatIndex in start..<end where visibilityFlagsRef.pointer[splatIndex] != 0 {
-                visibleIndicesRef.pointer[writeIndex] = UInt32(splatIndex)
-                writeIndex += 1
-            }
-        }
-
-        return visibleCount
-    }
-
     nonisolated static func downsampleVisibleIndicesInPlace(
         visibleIndexBuffer: MTLBuffer,
         sourceCount: Int,
@@ -259,21 +163,6 @@ extension GSSortingSystem {
         if clamped <= quantization { return clamped }
         let quantized = (clamped / quantization) * quantization
         return max(1, min(quantized, totalCount))
-    }
-
-    nonisolated static func isSplatVisible(
-        _ splatPosition: SIMD3<Float>,
-        localCameraPos: SIMD3<Float>,
-        localCameraForward: SIMD3<Float>,
-        cullThreshold: Float
-    ) -> Bool {
-        let delta = splatPosition - localCameraPos
-        let distanceSquared = max(simd_length_squared(delta), 1e-6)
-        let inverseDistance = 1.0 / (1.0 + Self.cullDistanceScale * distanceSquared)
-        let direction = delta * rsqrt(distanceSquared)
-        let facing = dot(direction, localCameraForward)
-        let visibility = max(0.0, min(1.0, 0.5 + 0.5 * facing))
-        return (inverseDistance * visibility) >= cullThreshold
     }
 
     func currentCullThreshold(for entityID: ObjectIdentifier) -> Float {
@@ -414,18 +303,5 @@ extension GSSortingSystem {
         )
         radixPassStateCache[entityID] = state
         return state.currentPassCount
-    }
-}
-
-@available(macOS 26.0, *)
-@available(visionOS 2.0, *)
-
-extension GSSortingSystem {
-    struct UnsafeReadablePointer<Pointee>: @unchecked Sendable {
-        let pointer: UnsafePointer<Pointee>
-    }
-
-    struct UnsafeWritablePointer<Pointee>: @unchecked Sendable {
-        let pointer: UnsafeMutablePointer<Pointee>
     }
 }

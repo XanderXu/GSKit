@@ -22,8 +22,8 @@ struct ImmersiveView: View {
 
             let cameraAnchor = AnchorEntity(world: SIMD3<Float>(0, 0, 3))
             var cameraComp = PerspectiveCameraComponent()
-            cameraComp.near = 0.01
-            cameraComp.far = 100.0
+            cameraComp.near = 0.05
+            cameraComp.far = 150.0
             cameraAnchor.components.set(cameraComp)
             root.addChild(cameraAnchor)
 

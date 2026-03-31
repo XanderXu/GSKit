@@ -33,5 +33,6 @@ struct GSKit_visionOSApp: App {
                 }
         }
         .immersionStyle(selection: .constant(.mixed), in: .mixed)
+//        .immersionStyle(selection: .constant(.progressive(0.1...1, initialAmount: 0.5)), in: .progressive)
     }
 }

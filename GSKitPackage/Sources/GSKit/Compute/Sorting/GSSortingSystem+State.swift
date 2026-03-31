@@ -12,6 +12,7 @@ extension GSSortingSystem {
             .union(sortBuffersB.keys)
             .union(visibleIndexBuffers.keys)
             .union(visibleIndexIdentityCountCache.keys)
+            .union(visibleCountBuffers.keys)
             .union(histogramBuffers.keys)
             .union(renderableSplatCountCache.keys)
             .union(activeVisibleCountCache.keys)
@@ -28,6 +29,7 @@ extension GSSortingSystem {
             sortBuffersB.removeValue(forKey: key)
             visibleIndexBuffers.removeValue(forKey: key)
             visibleIndexIdentityCountCache.removeValue(forKey: key)
+            visibleCountBuffers.removeValue(forKey: key)
             histogramBuffers.removeValue(forKey: key)
             localBoundsCache.removeValue(forKey: key)
             radixPassStateCache.removeValue(forKey: key)
@@ -148,13 +150,14 @@ extension GSSortingSystem {
             ) || activeVisibleCountCache[entityID] == nil
 
             if shouldRecomputeVisibleSet {
-                let recomputedActiveCount = compactVisibleSplats(
+                let recomputedActiveCount = performGPUCompaction(
+                    entityID: entityID,
                     positionBuffer: data.positionBuffer,
-                    count: totalCount,
+                    visibleIndexBuffer: visibleIndexBuffer,
+                    totalCount: totalCount,
                     localCameraPos: localCameraPos,
                     localCameraForward: localCameraForward,
-                    cullThreshold: cullThreshold,
-                    outputVisibleIndices: visibleIndexBuffer
+                    cullThreshold: cullThreshold
                 )
                 activeVisibleCountCache[entityID] = recomputedActiveCount
                 lastCompactionPositions[entityID] = localCameraPos
@@ -280,6 +283,64 @@ extension GSSortingSystem {
             job: job,
             target: SortCompletionTarget(entity: entity, lowLevelMesh: data.lowLevelMesh)
         )
+    }
+
+    func performGPUCompaction(
+        entityID: ObjectIdentifier,
+        positionBuffer: MTLBuffer,
+        visibleIndexBuffer: MTLBuffer,
+        totalCount: Int,
+        localCameraPos: SIMD3<Float>,
+        localCameraForward: SIMD3<Float>,
+        cullThreshold: Float
+    ) -> Int {
+        guard let pipeline = cullPipeline else { return 0 }
+
+        let visibleCountBuffer = getOrMakeBuffer(
+            from: &visibleCountBuffers,
+            entityID: entityID,
+            size: MemoryLayout<UInt32>.stride,
+            options: .storageModeShared
+        )
+        guard let visibleCountBuffer else { return 0 }
+
+        // Zero the visible counter
+        let countPtr = visibleCountBuffer.contents().bindMemory(to: UInt32.self, capacity: 1)
+        countPtr.pointee = 0
+
+        guard let commandBuffer = commandQueue.makeCommandBuffer(),
+              let encoder = commandBuffer.makeComputeCommandEncoder() else {
+            return 0
+        }
+
+        let threadGroupSize = 256
+        let paddedCount = max(256, ((totalCount + 255) / 256) * 256)
+        let numGroups = (paddedCount + threadGroupSize - 1) / threadGroupSize
+
+        encoder.label = "GSKit Cull Compact"
+        encoder.setComputePipelineState(pipeline)
+        encoder.setBuffer(positionBuffer, offset: 0, index: 0)
+        encoder.setBuffer(visibleIndexBuffer, offset: 0, index: 1)
+        encoder.setBuffer(visibleCountBuffer, offset: 0, index: 2)
+        var params = CullKernelParams(
+            cameraLocalPos: SIMD4<Float>(localCameraPos.x, localCameraPos.y, localCameraPos.z, 0),
+            cameraLocalForward: SIMD4<Float>(localCameraForward.x, localCameraForward.y, localCameraForward.z, 0),
+            cullThreshold: cullThreshold,
+            cullDistanceScale: Self.cullDistanceScale,
+            totalCount: UInt32(totalCount),
+            padding: 0
+        )
+        encoder.setBytes(&params, length: MemoryLayout<CullKernelParams>.stride, index: 3)
+        encoder.dispatchThreadgroups(
+            MTLSize(width: numGroups, height: 1, depth: 1),
+            threadsPerThreadgroup: MTLSize(width: threadGroupSize, height: 1, depth: 1)
+        )
+        encoder.endEncoding()
+
+        commandBuffer.commit()
+        commandBuffer.waitUntilCompleted()
+
+        return Int(countPtr.pointee)
     }
 
     func getOrMakeBuffer(

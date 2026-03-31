@@ -128,7 +128,6 @@ extension GSSortingSystem {
         "GSKIT_COMPACTION_IDLE_REFRESH_SECONDS",
         defaultValue: 2.00
     )
-    nonisolated static let compactionWorkChunkSize = 4_096
 
     nonisolated private static let defaultCameraPositionEpsilon: Float = 0.01
     nonisolated private static let defaultCameraForwardDotThreshold: Float = 0.9985

@@ -135,6 +135,15 @@ extension GSSortingSystem {
         var padding2: UInt32
     }
 
+    struct CullKernelParams {
+        var cameraLocalPos: SIMD4<Float>
+        var cameraLocalForward: SIMD4<Float>
+        var cullThreshold: Float
+        var cullDistanceScale: Float
+        var totalCount: UInt32
+        var padding: UInt32
+    }
+
     struct PreparedSort: @unchecked Sendable {
         let job: SortDispatchJob
         let target: SortCompletionTarget

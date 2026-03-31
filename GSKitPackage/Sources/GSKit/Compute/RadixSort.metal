@@ -61,8 +61,45 @@ inline uint gskit_radix_digit(uint key, uint shift)
     return (invertedKey >> shift) & 0xFFu;
 }
 
+// --- Cull & Compact ---
+// GPU-driven visibility test and stream compaction.
+// Each thread tests one splat against a directional cull heuristic; visible splats
+// are compacted into a contiguous index list via global atomic counter.
+
+struct GSCullParams {
+    float4 cameraLocalPos;
+    float4 cameraLocalForward;
+    float cullThreshold;
+    float cullDistanceScale;
+    uint totalCount;
+    uint padding;
+};
+
+kernel void gskit_cull_compact(
+    device const float3 *positions [[buffer(0)]],
+    device uint *visibleIndices [[buffer(1)]],
+    device atomic_uint *visibleCount [[buffer(2)]],
+    constant GSCullParams &params [[buffer(3)]],
+    uint tid [[thread_position_in_grid]])
+{
+    if (tid >= params.totalCount) return;
+
+    float3 delta = positions[tid] - params.cameraLocalPos.xyz;
+    float distSq = max(dot(delta, delta), 1e-6f);
+    float inverseDist = 1.0f / (1.0f + params.cullDistanceScale * distSq);
+    float3 direction = delta * rsqrt(distSq);
+    float facing = dot(direction, params.cameraLocalForward.xyz);
+    float visibility = clamp(0.5f + 0.5f * facing, 0.0f, 1.0f);
+
+    if (inverseDist * visibility >= params.cullThreshold) {
+        uint offset = atomic_fetch_add_explicit(visibleCount, 1u, memory_order_relaxed);
+        visibleIndices[offset] = tid;
+    }
+}
+
 // --- Pass 1: Compute Depths ---
 // Calculate planar depth (dot product against camera forward vector) encoding an ordered key.
+
 kernel void gskit_calculate_depths(
     device const GSInstanceData *instances [[buffer(0)]],
     device const uint *visibleIndices [[buffer(1)]],
