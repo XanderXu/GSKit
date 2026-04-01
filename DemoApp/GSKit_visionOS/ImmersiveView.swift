@@ -26,9 +26,9 @@ struct ImmersiveView: View {
             cameraComp.far = 100.0
             cameraAnchor.components.set(cameraComp)
             
-            let cube = ModelEntity(mesh: MeshResource.generateBox(size: 0.1), materials: [UnlitMaterial(color: .red)])
-            cameraAnchor.addChild(cube)
-            cube.position = [0, 0, -1]
+//            let cube = ModelEntity(mesh: MeshResource.generateBox(size: 0.1), materials: [UnlitMaterial(color: .red)])
+//            cameraAnchor.addChild(cube)
+//            cube.position = [0, 0, -1]
             root.addChild(cameraAnchor)
 
             content.add(root)

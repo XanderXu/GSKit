@@ -1,5 +1,4 @@
 import Foundation
-import Metal
 import RealityKit
 import simd
 
@@ -7,236 +6,124 @@ import simd
 @available(visionOS 2.0, *)
 
 extension GSSortingSystem {
-    static func encodeAndCommitSortBatch(_ sorts: [PreparedSort]) {
-        guard !sorts.isEmpty,
-              let commandBuffer = sorts[0].job.commandQueue.makeCommandBuffer() else {
-            return
-        }
 
-        commandBuffer.label = "GSKit Sort Batch"
-        var didEncodeWork = false
-        var cullCallbacks: [CullResultCallback] = []
+    // MARK: - Sort Result
 
-        for preparedSort in sorts {
-            guard preparedSort.target.entity != nil else { continue }
-            let destinationIndexBuffer = preparedSort.target.lowLevelMesh.replaceIndices(using: commandBuffer)
-            didEncodeWork = encodeDirectSort(
-                job: preparedSort.job,
-                destinationIndexBuffer: destinationIndexBuffer,
-                into: commandBuffer
-            ) || didEncodeWork
-            if let callback = preparedSort.job.onCullComplete {
-                cullCallbacks.append(callback)
-            }
-        }
-
-        guard didEncodeWork else { return }
-        commandBuffer.commit()
-
-        if !cullCallbacks.isEmpty {
-            let callbacks = cullCallbacks
-            commandBuffer.addCompletedHandler { _ in
-                for callback in callbacks {
-                    let countPtr = callback.visibleCountBuffer.contents().bindMemory(to: UInt32.self, capacity: 1)
-                    let visibleCount = Int(countPtr.pointee)
-                    Self.pendingCullLock.lock()
-                    Self.pendingCullResults[callback.entityID] = visibleCount
-                    Self.pendingCullLock.unlock()
-                }
-            }
-        }
+    struct GSCpuSortResult: @unchecked Sendable {
+        let indices: [UInt32]
+        let entityID: ObjectIdentifier
     }
 
-    nonisolated(unsafe) static var pendingCullResults: [ObjectIdentifier: Int] = [:]
-    nonisolated(unsafe) static var pendingCullLock: NSLock = NSLock()
+    // MARK: - Thread-safe Result Transfer
 
-    static func consumePendingCullResult(for entityID: ObjectIdentifier) -> Int? {
-        pendingCullLock.lock()
-        defer { pendingCullLock.unlock() }
-        return pendingCullResults.removeValue(forKey: entityID)
+    nonisolated(unsafe) static var pendingSortResult: GSCpuSortResult?
+    nonisolated(unsafe) static var pendingSortLock: NSLock = NSLock()
+
+    nonisolated static func submitSortResult(_ result: GSCpuSortResult) {
+        pendingSortLock.lock()
+        pendingSortResult = result
+        pendingSortLock.unlock()
     }
 
-    nonisolated static func encodeDirectSort(
-        job: SortDispatchJob,
-        destinationIndexBuffer: MTLBuffer,
-        into commandBuffer: MTLCommandBuffer
-    ) -> Bool {
-        let threadGroupSize = 256
-        let threadsPerThreadgroup = MTLSize(width: threadGroupSize, height: 1, depth: 1)
-        let countGroups = MTLSize(width: job.numGroups, height: 1, depth: 1)
-        let writeGroupCount = max(1, (job.activeCount + threadGroupSize - 1) / threadGroupSize)
-        let writeGroups = MTLSize(width: writeGroupCount, height: 1, depth: 1)
+    nonisolated static func consumePendingSortResult(for entityID: ObjectIdentifier) -> GSCpuSortResult? {
+        pendingSortLock.lock()
+        defer { pendingSortLock.unlock() }
+        guard let result = pendingSortResult, result.entityID == entityID else {
+            return nil
+        }
+        pendingSortResult = nil
+        return result
+    }
 
-        guard let encoder = commandBuffer.makeComputeCommandEncoder() else { return false }
-        encoder.label = "GSKit Sort Pipeline"
+    // MARK: - CPU Radix Sort
 
-        // --- Cull Pass (optional) ---
-        if let cullPipeline = job.cullPipeline, let cullParams = job.cullParams {
-            let totalPaddedGroups = job.totalNumGroups
-            encoder.setComputePipelineState(cullPipeline)
-            encoder.setBuffer(job.positionBuffer, offset: 0, index: 0)
-            encoder.setBuffer(job.visibleIndicesBuffer, offset: 0, index: 1)
-            if let visibleCountBuffer = job.visibleCountBuffer {
-                encoder.setBuffer(visibleCountBuffer, offset: 0, index: 2)
-            }
-            var params = cullParams
-            encoder.setBytes(&params, length: MemoryLayout<CullKernelParams>.stride, index: 3)
-            encoder.dispatchThreadgroups(
-                MTLSize(width: totalPaddedGroups, height: 1, depth: 1),
-                threadsPerThreadgroup: threadsPerThreadgroup
-            )
+    /// 3-pass LSD radix sort using 11 bits per pass (covers full UInt32 range).
+    /// Sorts splats by depth (back-to-front) and returns the sorted splat indices.
+    nonisolated static func performCpuSort(
+        positions: [SIMD3<Float>],
+        cameraPos: SIMD3<Float>,
+        cameraForward: SIMD3<Float>,
+        count: Int,
+        entityID: ObjectIdentifier
+    ) -> GSCpuSortResult {
+        typealias Entry = (key: UInt32, index: UInt32)
+
+        let capacity = count
+        var source = [Entry](repeating: (0, 0), count: capacity)
+        var dest = [Entry](repeating: (0, 0), count: capacity)
+
+        // 1. Compute depth keys
+        for i in 0..<count {
+            let depth = simd_dot(positions[i] - cameraPos, cameraForward)
+            // Negate depth so that farther splats (larger depth) sort first (smaller key)
+            let key = UInt32(clamping: Int64((-depth + 10_000.0) * 1_000.0))
+            source[i] = (key, UInt32(i))
         }
 
-        // --- Depth Pass ---
-        encoder.setComputePipelineState(job.depthPipeline)
-        encoder.setBuffer(job.positionBuffer, offset: 0, index: 0)
-        encoder.setBuffer(job.visibleIndicesBuffer, offset: 0, index: 1)
-        encoder.setBuffer(job.sortBufferA, offset: 0, index: 2)
-        var depthParams = job.depthParams
-        encoder.setBytes(&depthParams, length: MemoryLayout<DepthKernelParams>.stride, index: 3)
-        encoder.dispatchThreadgroups(countGroups, threadsPerThreadgroup: threadsPerThreadgroup)
+        // 2. LSD radix sort: 3 passes x 11 bits (covers 33 bits > 32-bit key)
+        let bitsPerPass = 11
+        let radixSize = 1 << bitsPerPass  // 2048
+        let mask = UInt32(radixSize - 1)
 
-        // --- Radix Sort Passes ---
-        var currentSourceBuffer = job.sortBufferA
-        var currentDestBuffer = job.sortBufferB
-        let passCount = max(minAdaptiveRadixPassCount, min(job.radixPassCount, radixShifts.count))
+        for pass in 0..<3 {
+            let shift = UInt32(pass * bitsPerPass)
 
-        for pass in 0..<passCount {
             // Count
-            encoder.setComputePipelineState(job.radixCountPipeline)
-            encoder.setBuffer(currentSourceBuffer, offset: 0, index: 0)
-            encoder.setBuffer(job.histogramBuffer, offset: 0, index: 1)
-            var passParams = job.radixPassParams[pass]
-            encoder.setBytes(&passParams, length: MemoryLayout<RadixPassKernelParams>.stride, index: 2)
-            encoder.dispatchThreadgroups(countGroups, threadsPerThreadgroup: threadsPerThreadgroup)
+            var counts = [Int](repeating: 0, count: radixSize)
+            for i in 0..<count {
+                let digit = Int((source[i].key >> shift) & mask)
+                counts[digit] += 1
+            }
 
-            // Scan
-            encoder.setComputePipelineState(job.radixScanPipeline)
-            encoder.setBuffer(job.histogramBuffer, offset: 0, index: 0)
-            var scanParams = job.scanParams
-            encoder.setBytes(&scanParams, length: MemoryLayout<RadixScanKernelParams>.stride, index: 1)
-            encoder.dispatchThreadgroups(
-                MTLSize(width: 1, height: 1, depth: 1),
-                threadsPerThreadgroup: threadsPerThreadgroup
-            )
+            // Prefix sum
+            var total = 0
+            for d in 0..<radixSize {
+                let c = counts[d]
+                counts[d] = total
+                total += c
+            }
 
             // Scatter
-            encoder.setComputePipelineState(job.radixScatterPipeline)
-            encoder.setBuffer(currentSourceBuffer, offset: 0, index: 0)
-            encoder.setBuffer(currentDestBuffer, offset: 0, index: 1)
-            encoder.setBuffer(job.histogramBuffer, offset: 0, index: 2)
-            var scatterParams = job.radixPassParams[pass]
-            encoder.setBytes(&scatterParams, length: MemoryLayout<RadixPassKernelParams>.stride, index: 3)
-            encoder.dispatchThreadgroups(countGroups, threadsPerThreadgroup: threadsPerThreadgroup)
+            for i in 0..<count {
+                let digit = Int((source[i].key >> shift) & mask)
+                dest[counts[digit]] = source[i]
+                counts[digit] += 1
+            }
 
-            swap(&currentSourceBuffer, &currentDestBuffer)
+            swap(&source, &dest)
         }
 
-        // --- Write Indices ---
-        encoder.setComputePipelineState(job.writeIndicesPipeline)
-        encoder.setBuffer(currentSourceBuffer, offset: 0, index: 0)
-        encoder.setBuffer(destinationIndexBuffer, offset: 0, index: 1)
-        var writeParams = job.writeParams
-        encoder.setBytes(&writeParams, length: MemoryLayout<WriteIndicesKernelParams>.stride, index: 2)
-        encoder.dispatchThreadgroups(writeGroups, threadsPerThreadgroup: threadsPerThreadgroup)
-
-        encoder.endEncoding()
-        return true
-    }
-}
-
-@available(macOS 26.0, *)
-@available(visionOS 2.0, *)
-
-extension GSSortingSystem {
-    struct DepthKernelParams {
-        var cameraLocalPos: SIMD4<Float>
-        var cameraLocalForward: SIMD4<Float>
-        var count: UInt32
-        var paddedCount: UInt32
-        var padding0: UInt32
-        var padding1: UInt32
-    }
-
-    struct RadixPassKernelParams {
-        var paddedCount: UInt32
-        var shift: UInt32
-        var numGroups: UInt32
-        var padding: UInt32
-    }
-
-    struct RadixScanKernelParams {
-        var numGroups: UInt32
-        var padding0: UInt32
-        var padding1: UInt32
-        var padding2: UInt32
-    }
-
-    struct WriteIndicesKernelParams {
-        var activeCount: UInt32
-        var padding0: UInt32
-        var padding1: UInt32
-        var padding2: UInt32
-    }
-
-    struct CullKernelParams {
-        var cameraLocalPos: SIMD4<Float>
-        var cameraLocalForward: SIMD4<Float>
-        var cullThreshold: Float
-        var cullDistanceScale: Float
-        var totalCount: UInt32
-        var padding: UInt32
-    }
-
-    struct PreparedSort: @unchecked Sendable {
-        let job: SortDispatchJob
-        let target: SortCompletionTarget
-    }
-
-    final class SortCompletionTarget: @unchecked Sendable {
-        weak var entity: Entity?
-        let lowLevelMesh: LowLevelMesh
-
-        init(entity: Entity, lowLevelMesh: LowLevelMesh) {
-            self.entity = entity
-            self.lowLevelMesh = lowLevelMesh
+        // 3. Extract sorted indices (source now has final sorted order)
+        var sortedIndices = [UInt32](repeating: 0, count: count)
+        for i in 0..<count {
+            sortedIndices[i] = source[i].index
         }
+
+        return GSCpuSortResult(indices: sortedIndices, entityID: entityID)
     }
 
-    struct SortDispatchJob: @unchecked Sendable {
-        let commandQueue: MTLCommandQueue
-        let depthPipeline: MTLComputePipelineState
-        let cullPipeline: MTLComputePipelineState?
-        let radixCountPipeline: MTLComputePipelineState
-        let radixScanPipeline: MTLComputePipelineState
-        let radixScatterPipeline: MTLComputePipelineState
-        let writeIndicesPipeline: MTLComputePipelineState
-        let positionBuffer: MTLBuffer
-        let visibleIndicesBuffer: MTLBuffer
-        let sortBufferA: MTLBuffer
-        let sortBufferB: MTLBuffer
-        let histogramBuffer: MTLBuffer
-        let visibleCountBuffer: MTLBuffer?
-        let depthParams: DepthKernelParams
-        let cullParams: CullKernelParams?
-        let radixPassParams: [RadixPassKernelParams]
-        let scanParams: RadixScanKernelParams
-        let writeParams: WriteIndicesKernelParams
-        let activeCount: Int
-        let numGroups: Int
-        let radixPassCount: Int
-        let totalCount: Int
-        let totalNumGroups: Int
-        let onCullComplete: CullResultCallback?
-    }
+    /// Expand sorted splat indices into quad index buffer and write to LowLevelMesh.
+    static func writeSortedIndices(
+        _ sortedIndices: [UInt32],
+        activeCount: Int,
+        to lowLevelMesh: LowLevelMesh
+    ) {
+        let count = min(activeCount, sortedIndices.count)
+        guard count > 0 else { return }
 
-    final class CullResultCallback: @unchecked Sendable {
-        let entityID: ObjectIdentifier
-        let visibleCountBuffer: MTLBuffer
-
-        init(entityID: ObjectIdentifier, visibleCountBuffer: MTLBuffer) {
-            self.entityID = entityID
-            self.visibleCountBuffer = visibleCountBuffer
+        lowLevelMesh.replaceUnsafeMutableIndices { destination in
+            guard let destPtr = destination.baseAddress?.assumingMemoryBound(to: UInt32.self) else { return }
+            for i in 0..<count {
+                let splatIdx = sortedIndices[i]
+                let base = splatIdx &* 4  // 4 vertices per quad
+                let offset = i &* 6       // 6 indices per quad
+                destPtr[offset + 0] = base + 0
+                destPtr[offset + 1] = base + 1
+                destPtr[offset + 2] = base + 2
+                destPtr[offset + 3] = base + 0
+                destPtr[offset + 4] = base + 2
+                destPtr[offset + 5] = base + 3
+            }
         }
     }
 }

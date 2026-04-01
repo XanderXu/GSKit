@@ -4,9 +4,6 @@ import Foundation
 @available(visionOS 2.0, *)
 
 extension GSSortingSystem {
-    nonisolated static let radixShifts: [UInt32] = [0, 8, 16]
-    nonisolated static let minAdaptiveRadixPassCount = 2
-    nonisolated static let maxAdaptiveRadixPassCount = 3
     nonisolated static let cameraPositionEpsilon: Float = envFloat(
         "GSKIT_CAMERA_POSITION_EPSILON",
         defaultValue: defaultCameraPositionEpsilon
@@ -23,31 +20,10 @@ extension GSSortingSystem {
         "GSKIT_SORT_IDLE_REFRESH_SECONDS",
         defaultValue: defaultSortIdleRefreshSeconds
     )
-    nonisolated static let useDirectionalCull: Bool = envBool(
-        "GSKIT_USE_DIRECTIONAL_CULL",
-        defaultValue: false
-    )
     nonisolated static let activeCountQuantization: Int = max(
         1,
         envInt("GSKIT_ACTIVE_COUNT_QUANTIZATION", defaultValue: 4_096)
     )
-    nonisolated static let cullDistanceScale: Float = 0.05
-    nonisolated static let defaultCullControlThreshold: Float = envFloat(
-        "GSKIT_CULL_THRESHOLD",
-        defaultValue: 0.02
-    )
-    nonisolated static let minCullControlThreshold: Float = envFloat(
-        "GSKIT_MIN_CULL_THRESHOLD",
-        defaultValue: 0.01
-    )
-    nonisolated static let maxCullControlThreshold: Float = envFloat(
-        "GSKIT_MAX_CULL_THRESHOLD",
-        defaultValue: 0.25
-    )
-    nonisolated static let minActiveRatio: Float = {
-        let ratio = envFloat("GSKIT_MIN_ACTIVE_RATIO", defaultValue: 0.35)
-        return max(0.01, min(ratio, 1.0))
-    }()
     nonisolated static let defaultRenderBudgetRatio: Float = envFloat(
         "GSKIT_RENDER_BUDGET_RATIO",
         defaultValue: 1.0
@@ -88,14 +64,6 @@ extension GSSortingSystem {
         1,
         envInt("GSKIT_BUDGET_HIGH_FPS_RECOVERY_STEPS", defaultValue: 3)
     )
-    nonisolated static let cullAdaptRate: Float = envFloat(
-        "GSKIT_CULL_ADAPT_RATE",
-        defaultValue: 0.035
-    )
-    nonisolated static let targetVisibleRatio: Float? = envOptionalFloat(
-        "GSKIT_TARGET_VISIBLE_RATIO",
-        clampedTo: 0.02...1.0
-    )
     nonisolated static let targetFPS: Float = envFloat(
         "GSKIT_TARGET_FPS",
         defaultValue: defaultTargetFPS
@@ -103,30 +71,6 @@ extension GSSortingSystem {
     nonisolated static let fpsDeadband: Float = envFloat(
         "GSKIT_FPS_DEADBAND",
         defaultValue: 1.5
-    )
-    nonisolated static let fpsCullAdaptGain: Float = envFloat(
-        "GSKIT_FPS_CULL_ADAPT_GAIN",
-        defaultValue: 0.01
-    )
-    nonisolated static let fpsCullRecoveryGain: Float = envFloat(
-        "GSKIT_FPS_CULL_RECOVERY_GAIN",
-        defaultValue: 0.003
-    )
-    nonisolated static let compactionPositionEpsilon: Float = envFloat(
-        "GSKIT_COMPACTION_POSITION_EPSILON",
-        defaultValue: 0.01
-    )
-    nonisolated static let compactionForwardDotThreshold: Float = envFloat(
-        "GSKIT_COMPACTION_FORWARD_DOT_THRESHOLD",
-        defaultValue: 0.9985
-    )
-    nonisolated static let compactionMinIntervalSeconds: CFTimeInterval = envDouble(
-        "GSKIT_COMPACTION_MIN_INTERVAL_SECONDS",
-        defaultValue: 0.20
-    )
-    nonisolated static let compactionIdleRefreshSeconds: CFTimeInterval = envDouble(
-        "GSKIT_COMPACTION_IDLE_REFRESH_SECONDS",
-        defaultValue: 2.00
     )
 
     nonisolated private static let defaultCameraPositionEpsilon: Float = 0.01
@@ -149,7 +93,7 @@ extension GSSortingSystem {
               let parsed = Int(raw) else {
             return defaultValue
         }
-        return parsed
+        return max(0, parsed)
     }
 
     nonisolated static func envBool(_ key: String, defaultValue: Bool) -> Bool {
@@ -164,18 +108,6 @@ extension GSSortingSystem {
         default:
             return defaultValue
         }
-    }
-
-    nonisolated static func envOptionalFloat(
-        _ key: String,
-        clampedTo bounds: ClosedRange<Float>
-    ) -> Float? {
-        guard let raw = ProcessInfo.processInfo.environment[key],
-              let parsed = Float(raw),
-              parsed.isFinite else {
-            return nil
-        }
-        return max(bounds.lowerBound, min(parsed, bounds.upperBound))
     }
 
     nonisolated static func envDouble(_ key: String, defaultValue: Double) -> Double {

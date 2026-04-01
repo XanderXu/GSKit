@@ -7,350 +7,71 @@ import simd
 @available(visionOS 2.0, *)
 
 extension GSSortingSystem {
-    func cleanupBufferCaches(activeEntityIDs: Set<ObjectIdentifier>) {
-        let allKeys = Set(sortBuffersA.keys)
-            .union(sortBuffersB.keys)
-            .union(visibleIndexBuffers.keys)
-            .union(visibleIndexIdentityCountCache.keys)
-            .union(visibleCountBuffers.keys)
-            .union(histogramBuffers.keys)
-            .union(renderableSplatCountCache.keys)
-            .union(activeVisibleCountCache.keys)
-            .union(renderBudgetRatioCache.keys)
-            .union(budgetFpsEstimateCache.keys)
-            .union(budgetLowFpsStreakCache.keys)
-            .union(budgetHighFpsStreakCache.keys)
-            .union(lastCompactionTimes.keys)
-            .union(lastBudgetAdjustTimes.keys)
-            .union(lastSortTimes.keys)
-
-        for key in allKeys where !activeEntityIDs.contains(key) {
-            sortBuffersA.removeValue(forKey: key)
-            sortBuffersB.removeValue(forKey: key)
-            visibleIndexBuffers.removeValue(forKey: key)
-            visibleIndexIdentityCountCache.removeValue(forKey: key)
-            visibleCountBuffers.removeValue(forKey: key)
-            histogramBuffers.removeValue(forKey: key)
-            localBoundsCache.removeValue(forKey: key)
-            radixPassStateCache.removeValue(forKey: key)
-            cullThresholdCache.removeValue(forKey: key)
-            renderBudgetRatioCache.removeValue(forKey: key)
-            budgetFpsEstimateCache.removeValue(forKey: key)
-            budgetLowFpsStreakCache.removeValue(forKey: key)
-            budgetHighFpsStreakCache.removeValue(forKey: key)
-            renderableSplatCountCache.removeValue(forKey: key)
-            activeVisibleCountCache.removeValue(forKey: key)
-            lastBudgetAdjustTimes.removeValue(forKey: key)
-            lastCompactionPositions.removeValue(forKey: key)
-            lastCompactionForwards.removeValue(forKey: key)
-            lastCompactionTimes.removeValue(forKey: key)
-            lastSortTimes.removeValue(forKey: key)
-            lastCameraPositions.removeValue(forKey: key)
-            lastCameraForwards.removeValue(forKey: key)
-        }
-    }
-
-    func prepareSortDispatch(
-        for entity: Entity,
-        with data: GSModelDataComponent,
-        localCameraPos: SIMD3<Float>,
-        localCameraForward: SIMD3<Float>,
-        frameDeltaTime: Float
-    ) -> PreparedSort? {
-        let totalCount = data.splatCount
-        guard totalCount > 0 else { return nil }
-
-        let totalPaddedCount = max(256, ((totalCount + 255) / 256) * 256)
-        let totalNumGroups = (totalPaddedCount + 255) / 256
-        let sortEntrySize = MemoryLayout<SIMD2<UInt32>>.stride
-        let sortBufferSize = totalPaddedCount * sortEntrySize
-        let visibleIndexBufferSize = totalCount * MemoryLayout<UInt32>.stride
-        let histogramSize = 256 * totalNumGroups * MemoryLayout<UInt32>.stride
-
-        let entityID = ObjectIdentifier(entity)
-        guard let localBounds = getOrComputeLocalBounds(
-            entityID: entityID,
-            positionBuffer: data.positionBuffer,
-            count: totalCount
-        ) else {
-            return nil
-        }
-
-        // Consume async cull result from previous frame
-        if let pendingResult = Self.consumePendingCullResult(for: entityID) {
-            activeVisibleCountCache[entityID] = pendingResult
-        }
-
-        let radixPassCount = recommendedRadixPassCount(
-            localBounds: localBounds,
-            localCameraPos: localCameraPos,
-            localCameraForward: localCameraForward
-        )
-        let stabilizedPassCount = stabilizedRadixPassCount(
-            entityID: entityID,
-            targetPassCount: radixPassCount
-        )
-
-        let positionDelta = distance(
-            localCameraPos,
-            lastCameraPositions[entityID] ?? SIMD3<Float>(.infinity, .infinity, .infinity)
-        )
-        let forwardDelta = dot(
-            localCameraForward,
-            lastCameraForwards[entityID] ?? SIMD3<Float>(.infinity, .infinity, .infinity)
-        )
-        let now = CFAbsoluteTimeGetCurrent()
-        let frameFPS = 1.0 / max(frameDeltaTime, 1.0 / 240.0)
-        let elapsedSinceLastSort = now - (lastSortTimes[entityID] ?? 0)
-
-        let cameraMoved = !(positionDelta < Self.cameraPositionEpsilon && forwardDelta > Self.cameraForwardDotThreshold)
-        if cameraMoved {
-            if elapsedSinceLastSort < Self.sortMinIntervalSeconds {
-                return nil
-            }
-        } else if elapsedSinceLastSort < Self.sortIdleRefreshSeconds {
-            return nil
-        }
-
-        lastCameraPositions[entityID] = localCameraPos
-        lastCameraForwards[entityID] = localCameraForward
-
-        guard let sortBufferA = getOrMakeBuffer(
-            from: &sortBuffersA,
-            entityID: entityID,
-            size: sortBufferSize,
-            options: .storageModePrivate
-        ), let sortBufferB = getOrMakeBuffer(
-            from: &sortBuffersB,
-            entityID: entityID,
-            size: sortBufferSize,
-            options: .storageModePrivate
-        ), let visibleIndexBuffer = getOrMakeBuffer(
-            from: &visibleIndexBuffers,
-            entityID: entityID,
-            size: visibleIndexBufferSize,
-            options: .storageModeShared
-        ), let histogramBuffer = getOrMakeBuffer(
-            from: &histogramBuffers,
-            entityID: entityID,
-            size: histogramSize,
-            options: .storageModePrivate
-        ) else {
-            return nil
-        }
-
-        // Build cull params if directional culling is enabled
-        var cullParams: CullKernelParams? = nil
-        var cullCallback: CullResultCallback? = nil
-        var visibleCountBufferToUse: MTLBuffer? = nil
-
-        if Self.useDirectionalCull {
-            let shouldRecomputeVisibleSet = shouldRecomputeCompaction(
-                entityID: entityID,
-                localCameraPos: localCameraPos,
-                localCameraForward: localCameraForward,
-                now: now
-            )
-
-            if shouldRecomputeVisibleSet {
-                let visibleCountBuffer = getOrMakeBuffer(
-                    from: &visibleCountBuffers,
-                    entityID: entityID,
-                    size: MemoryLayout<UInt32>.stride,
-                    options: .storageModeShared
-                )
-                guard let visibleCountBuffer else { return nil }
-
-                // Zero the visible counter
-                let countPtr = visibleCountBuffer.contents().bindMemory(to: UInt32.self, capacity: 1)
-                countPtr.pointee = 0
-
-                let cullThreshold = currentCullThreshold(for: entityID)
-                cullParams = CullKernelParams(
-                    cameraLocalPos: SIMD4<Float>(localCameraPos.x, localCameraPos.y, localCameraPos.z, 0),
-                    cameraLocalForward: SIMD4<Float>(localCameraForward.x, localCameraForward.y, localCameraForward.z, 0),
-                    cullThreshold: cullThreshold,
-                    cullDistanceScale: Self.cullDistanceScale,
-                    totalCount: UInt32(totalCount),
-                    padding: 0
-                )
-                visibleCountBufferToUse = visibleCountBuffer
-                cullCallback = CullResultCallback(entityID: entityID, visibleCountBuffer: visibleCountBuffer)
-
-                lastCompactionPositions[entityID] = localCameraPos
-                lastCompactionForwards[entityID] = localCameraForward
-                lastCompactionTimes[entityID] = now
-
-                if !Self.useDirectionalCull, visibleIndexIdentityCountCache[entityID] != totalCount {
-                    Self.fillIdentityVisibleIndices(visibleIndexBuffer: visibleIndexBuffer, count: totalCount)
-                    visibleIndexIdentityCountCache[entityID] = totalCount
-                }
-            }
-        } else {
-            if visibleIndexIdentityCountCache[entityID] != totalCount {
-                Self.fillIdentityVisibleIndices(visibleIndexBuffer: visibleIndexBuffer, count: totalCount)
-                visibleIndexIdentityCountCache[entityID] = totalCount
-            }
-        }
-
-        let visibleCount: Int
-        if Self.useDirectionalCull {
-            visibleCount = activeVisibleCountCache[entityID] ?? totalCount
-            if visibleCount < totalCount {
-                updateCullThreshold(
-                    for: entityID,
-                    activeCount: visibleCount,
-                    totalCount: totalCount,
-                    currentThreshold: currentCullThreshold(for: entityID),
-                    frameDeltaTime: frameDeltaTime
-                )
-            }
-        } else {
-            activeVisibleCountCache[entityID] = totalCount
-            visibleCount = totalCount
-        }
-        guard visibleCount > 0 else { return nil }
-
-        let renderBudgetRatio = updateAndGetRenderBudgetRatio(
-            for: entityID,
-            frameFPS: frameFPS,
-            now: now
-        )
-        let renderBudgetCount = Self.quantizeActiveCount(
-            max(1, min(totalCount, Int(Float(totalCount) * renderBudgetRatio))),
-            totalCount: totalCount
-        )
-
-        var activeCount = visibleCount
-        if activeCount > renderBudgetCount {
-            Self.downsampleVisibleIndicesInPlace(
-                visibleIndexBuffer: visibleIndexBuffer,
-                sourceCount: activeCount,
-                targetCount: renderBudgetCount
-            )
-            activeCount = renderBudgetCount
-        }
-        activeCount = Self.quantizeActiveCount(activeCount, totalCount: totalCount)
-
-        updateRenderableMeshPart(
-            for: entityID,
-            lowLevelMesh: data.lowLevelMesh,
-            baseParts: data.meshParts,
-            activeSplatCount: activeCount,
-            totalSplatCount: totalCount
-        )
-        guard activeCount > 0 else { return nil }
-
-        let activePaddedCount = max(256, ((activeCount + 255) / 256) * 256)
-        let activeNumGroups = (activePaddedCount + 255) / 256
-
-        guard let depthPipeline,
-              let radixCountPipeline,
-              let radixScanPipeline,
-              let radixScatterPipeline,
-              let writeIndicesPipeline else {
-            return nil
-        }
-
-        let depthParams = DepthKernelParams(
-            cameraLocalPos: SIMD4<Float>(localCameraPos.x, localCameraPos.y, localCameraPos.z, 0),
-            cameraLocalForward: SIMD4<Float>(localCameraForward.x, localCameraForward.y, localCameraForward.z, 0),
-            count: UInt32(activeCount),
-            paddedCount: UInt32(activePaddedCount),
-            padding0: 0,
-            padding1: 0
-        )
-
-        var radixPassParams: [RadixPassKernelParams] = []
-        radixPassParams.reserveCapacity(Self.radixShifts.count)
-        for shift in Self.radixShifts {
-            radixPassParams.append(
-                RadixPassKernelParams(
-                    paddedCount: UInt32(activePaddedCount),
-                    shift: shift,
-                    numGroups: UInt32(activeNumGroups),
-                    padding: 0
-                )
-            )
-        }
-
-        let scanParams = RadixScanKernelParams(
-            numGroups: UInt32(activeNumGroups),
-            padding0: 0,
-            padding1: 0,
-            padding2: 0
-        )
-
-        let writeParams = WriteIndicesKernelParams(
-            activeCount: UInt32(activeCount),
-            padding0: 0,
-            padding1: 0,
-            padding2: 0
-        )
-
-        let job = SortDispatchJob(
-            commandQueue: commandQueue,
-            depthPipeline: depthPipeline,
-            cullPipeline: cullParams != nil ? cullPipeline : nil,
-            radixCountPipeline: radixCountPipeline,
-            radixScanPipeline: radixScanPipeline,
-            radixScatterPipeline: radixScatterPipeline,
-            writeIndicesPipeline: writeIndicesPipeline,
-            positionBuffer: data.positionBuffer,
-            visibleIndicesBuffer: visibleIndexBuffer,
-            sortBufferA: sortBufferA,
-            sortBufferB: sortBufferB,
-            histogramBuffer: histogramBuffer,
-            visibleCountBuffer: visibleCountBufferToUse,
-            depthParams: depthParams,
-            cullParams: cullParams,
-            radixPassParams: radixPassParams,
-            scanParams: scanParams,
-            writeParams: writeParams,
-            activeCount: activeCount,
-            numGroups: activeNumGroups,
-            radixPassCount: stabilizedPassCount,
-            totalCount: totalCount,
-            totalNumGroups: totalNumGroups,
-            onCullComplete: cullCallback
-        )
-
-        lastSortTimes[entityID] = now
-        return PreparedSort(
-            job: job,
-            target: SortCompletionTarget(entity: entity, lowLevelMesh: data.lowLevelMesh)
-        )
-    }
-
-    func getOrMakeBuffer(
-        from dictionary: inout [ObjectIdentifier: MTLBuffer],
-        entityID: ObjectIdentifier,
-        size: Int,
-        options: MTLResourceOptions
-    ) -> MTLBuffer? {
-        if let existing = dictionary[entityID], existing.length >= size {
-            return existing
-        }
-        guard let newBuffer = device.makeBuffer(length: size, options: options) else {
-            return nil
-        }
-        dictionary[entityID] = newBuffer
-        return newBuffer
-    }
-}
-
-@available(macOS 26.0, *)
-@available(visionOS 2.0, *)
-
-extension GSSortingSystem {
     struct LocalBounds {
         let center: SIMD3<Float>
         let extent: SIMD3<Float>
     }
 
-    struct RadixPassState {
-        var currentPassCount: Int
-        var increaseStreak: Int
-        var decreaseStreak: Int
+    func getOrComputeLocalBounds(
+        entityID: ObjectIdentifier,
+        positionBuffer: MTLBuffer,
+        count: Int
+    ) -> LocalBounds? {
+        if let cached = localBoundsCache[entityID] {
+            return cached
+        }
+        guard count > 0 else { return nil }
+
+        let positions = positionBuffer.contents().bindMemory(to: SIMD3<Float>.self, capacity: count)
+        var minPosition = SIMD3<Float>(repeating: .greatestFiniteMagnitude)
+        var maxPosition = SIMD3<Float>(repeating: -.greatestFiniteMagnitude)
+
+        for index in 0..<count {
+            let position = positions[index]
+            minPosition = simd_min(minPosition, position)
+            maxPosition = simd_max(maxPosition, position)
+        }
+
+        let bounds = LocalBounds(
+            center: (minPosition + maxPosition) * 0.5,
+            extent: (maxPosition - minPosition) * 0.5
+        )
+        localBoundsCache[entityID] = bounds
+        return bounds
+    }
+
+    nonisolated static func quantizeActiveCount(_ count: Int, totalCount: Int) -> Int {
+        let clamped = max(1, min(count, totalCount))
+        let quantization = max(1, activeCountQuantization)
+        if clamped == totalCount { return totalCount }
+        if clamped <= quantization { return clamped }
+        let quantized = (clamped / quantization) * quantization
+        return max(1, min(quantized, totalCount))
+    }
+
+    func updateRenderableMeshPart(
+        for entityID: ObjectIdentifier,
+        lowLevelMesh: LowLevelMesh,
+        baseParts: [LowLevelMesh.Part],
+        activeSplatCount: Int,
+        totalSplatCount: Int
+    ) {
+        guard !baseParts.isEmpty else { return }
+        let clampedActiveCount = max(0, min(activeSplatCount, totalSplatCount))
+        if renderableSplatCountCache[entityID] == clampedActiveCount {
+            return
+        }
+        renderableSplatCountCache[entityID] = clampedActiveCount
+
+        let templatePart = baseParts[0]
+        lowLevelMesh.parts.replaceAll([
+            LowLevelMesh.Part(
+                indexOffset: templatePart.indexOffset,
+                indexCount: clampedActiveCount * 6,
+                topology: templatePart.topology,
+                materialIndex: templatePart.materialIndex,
+                bounds: templatePart.bounds
+            )
+        ])
     }
 }
