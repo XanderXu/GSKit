@@ -131,7 +131,7 @@ extension GSSortingSystem {
 
     nonisolated private static let defaultCameraPositionEpsilon: Float = 0.01
     nonisolated private static let defaultCameraForwardDotThreshold: Float = 0.9985
-    nonisolated private static let defaultSortMinIntervalSeconds: CFTimeInterval = 1.0 / 60.0
+    nonisolated private static let defaultSortMinIntervalSeconds: CFTimeInterval = 1.0 / 30.0
     nonisolated private static let defaultSortIdleRefreshSeconds: CFTimeInterval = 0.5
     nonisolated private static let defaultTargetFPS: Float = 60.0
 

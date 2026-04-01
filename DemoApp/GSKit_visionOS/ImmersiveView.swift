@@ -50,7 +50,23 @@ struct ImmersiveView: View {
         .task() {
             await loadModel()
         }
+        .task() {
+            await requestAuthorization()
+        }
         
+    }
+    func requestAuthorization() async {
+        let session = SpatialTrackingSession()
+        let configuration = SpatialTrackingSession.Configuration(tracking: [.world])
+        let unapprovedCapabilities = await session.run(configuration)
+        if let unapprovedCapabilities, unapprovedCapabilities.anchor.contains(.world) {
+            // AnchorEntities 仍然可以保持追踪，并保持视觉效果更新
+            // 但是，AnchorEntity.transform 将不会接收到更新
+            debugPrint("User has rejected world data for your app.")
+        } else {
+            // AnchorEntity.transform 将会报告手部锚点位置和姿态
+            debugPrint("User has approved world data for your app.\nAnchorEntity.transform will report anchor pose")
+        }
     }
     @MainActor
     private func loadModel() async {
@@ -61,8 +77,6 @@ struct ImmersiveView: View {
             let entity = try await GSEntity.load(url: Bundle.main.url(forResource: "IMG_9738", withExtension: "ply")!)
             guard !Task.isCancelled else { return }
             modelEntity = entity
-//            modelEntity?.position = SIMD3<Float>(0, 1, 0)
-//            modelEntity?.scale = SIMD3<Float>(0.01, 0.01, 0.01)
             loadState = .loaded
         } catch {
             guard !Task.isCancelled else { return }

@@ -22,7 +22,7 @@ struct GSCameraState {
 
         let transform = cameraEntity.transformMatrix(relativeTo: nil)
         let worldColumn = transform.columns.3
-        print(worldColumn)
+        print("worldColumn: \(worldColumn)")
         return GSCameraState(
             worldPosition: SIMD3<Float>(worldColumn.x, worldColumn.y, worldColumn.z),
             worldForward: -SIMD3<Float>(transform.columns.2.x, transform.columns.2.y, transform.columns.2.z)

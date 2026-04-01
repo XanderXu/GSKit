@@ -32,7 +32,7 @@ struct GSKit_visionOSApp: App {
                     appModel.immersiveSpaceState = .closed
                 }
         }
-        .immersionStyle(selection: .constant(.mixed), in: .mixed)
-//        .immersionStyle(selection: .constant(.progressive(0.1...1, initialAmount: 0.5)), in: .progressive)
+//        .immersionStyle(selection: .constant(.mixed), in: .mixed)
+        .immersionStyle(selection: .constant(.progressive(0.1...1, initialAmount: 0.5)), in: .progressive)
     }
 }
