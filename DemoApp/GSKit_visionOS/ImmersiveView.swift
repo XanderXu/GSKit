@@ -1,14 +1,6 @@
-//
-//  ImmersiveView.swift
-//  GSKit_visionOS
-//
-//  Created by XanderXu on 2026/3/30.
-//
-
 import SwiftUI
 import RealityKit
 import GSKit
-
 
 struct ImmersiveView: View {
 
@@ -20,16 +12,14 @@ struct ImmersiveView: View {
             let root = Entity()
             root.name = "GSRoot"
 
-            let cameraAnchor = AnchorEntity(.head, trackingMode: .continuous)
+            #if os(macOS)
+            let cameraAnchor = AnchorEntity(world: SIMD3<Float>(0, 0, 3))
             var cameraComp = PerspectiveCameraComponent()
-            cameraComp.near = 0.05
+            cameraComp.near = 0.01
             cameraComp.far = 100.0
             cameraAnchor.components.set(cameraComp)
-            
-//            let cube = ModelEntity(mesh: MeshResource.generateBox(size: 0.1), materials: [UnlitMaterial(color: .red)])
-//            cameraAnchor.addChild(cube)
-//            cube.position = [0, 0, -1]
             root.addChild(cameraAnchor)
+            #endif
 
             content.add(root)
         } update: { content in
@@ -55,19 +45,9 @@ struct ImmersiveView: View {
             await loadModel()
         }
         .task() {
-            await requestAuthorization()
+            await GSARKitHeadTracker.shared.start()
         }
-        
-    }
-    func requestAuthorization() async {
-        let session = SpatialTrackingSession()
-        let configuration = SpatialTrackingSession.Configuration(tracking: [.world])
-        let unapprovedCapabilities = await session.run(configuration)
-        if let unapprovedCapabilities, unapprovedCapabilities.anchor.contains(.world) {
-            debugPrint("User has rejected world data for your app.")
-        } else {
-            debugPrint("User has approved world data for your app.\nAnchorEntity.transform will report anchor pose")
-        }
+
     }
     @MainActor
     private func loadModel() async {
@@ -81,7 +61,6 @@ struct ImmersiveView: View {
             loadState = .loaded
         } catch {
             guard !Task.isCancelled else { return }
-            // `localizedDescription` is often too lossy for RealityKit load errors.
             loadState = .error(String(reflecting: error))
         }
     }
@@ -95,5 +74,5 @@ struct ImmersiveView: View {
 }
 
 #Preview(immersionStyle: .full) {
-    
+
 }

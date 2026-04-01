@@ -5,13 +5,23 @@ import simd
 @available(visionOS 2.0, *)
 
 struct GSCameraState {
-    private static let cameraQuery = EntityQuery(where: .has(PerspectiveCameraComponent.self))
-
     let worldPosition: SIMD3<Float>
     let worldForward: SIMD3<Float>
 
     @MainActor
     static func resolve(from context: SceneUpdateContext) -> GSCameraState? {
+        #if os(visionOS)
+        if let transform = GSARKitHeadTracker.shared.headTransform {
+            let worldColumn = transform.columns.3
+            print(worldColumn)
+            return GSCameraState(
+                worldPosition: SIMD3<Float>(worldColumn.x, worldColumn.y, worldColumn.z),
+                worldForward: -SIMD3<Float>(transform.columns.2.x, transform.columns.2.y, transform.columns.2.z)
+            )
+        }
+        #endif
+
+        // Fallback: query PerspectiveCameraComponent (macOS)
         let cameras = context.entities(
             matching: cameraQuery,
             updatingSystemWhen: .rendering
@@ -22,12 +32,13 @@ struct GSCameraState {
 
         let transform = cameraEntity.transformMatrix(relativeTo: nil)
         let worldColumn = transform.columns.3
-        print("worldColumn: \(cameraEntity.transform.translation)")
         return GSCameraState(
             worldPosition: SIMD3<Float>(worldColumn.x, worldColumn.y, worldColumn.z),
             worldForward: -SIMD3<Float>(transform.columns.2.x, transform.columns.2.y, transform.columns.2.z)
         )
     }
+
+    private static let cameraQuery = EntityQuery(where: .has(PerspectiveCameraComponent.self))
 
     func localSpace(relativeTo inverseModelMatrix: simd_float4x4) -> GSLocalCameraState {
         let localPosition4 = inverseModelMatrix * SIMD4<Float>(worldPosition.x, worldPosition.y, worldPosition.z, 1.0)
