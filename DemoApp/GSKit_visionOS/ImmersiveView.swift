@@ -25,6 +25,10 @@ struct ImmersiveView: View {
             cameraComp.near = 0.05
             cameraComp.far = 100.0
             cameraAnchor.components.set(cameraComp)
+            
+            let cube = ModelEntity(mesh: MeshResource.generateBox(size: 0.1), materials: [UnlitMaterial(color: .red)])
+            cameraAnchor.addChild(cube)
+            cube.position = [0, 0, -1]
             root.addChild(cameraAnchor)
 
             content.add(root)
@@ -60,11 +64,8 @@ struct ImmersiveView: View {
         let configuration = SpatialTrackingSession.Configuration(tracking: [.world])
         let unapprovedCapabilities = await session.run(configuration)
         if let unapprovedCapabilities, unapprovedCapabilities.anchor.contains(.world) {
-            // AnchorEntities 仍然可以保持追踪，并保持视觉效果更新
-            // 但是，AnchorEntity.transform 将不会接收到更新
             debugPrint("User has rejected world data for your app.")
         } else {
-            // AnchorEntity.transform 将会报告手部锚点位置和姿态
             debugPrint("User has approved world data for your app.\nAnchorEntity.transform will report anchor pose")
         }
     }
