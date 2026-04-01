@@ -1,3 +1,4 @@
+import Foundation
 import Metal
 import RealityKit
 import simd
@@ -14,6 +15,7 @@ extension GSSortingSystem {
 
         commandBuffer.label = "GSKit Sort Batch"
         var didEncodeWork = false
+        var cullCallbacks: [CullResultCallback] = []
 
         for preparedSort in sorts {
             guard preparedSort.target.entity != nil else { continue }
@@ -23,10 +25,35 @@ extension GSSortingSystem {
                 destinationIndexBuffer: destinationIndexBuffer,
                 into: commandBuffer
             ) || didEncodeWork
+            if let callback = preparedSort.job.onCullComplete {
+                cullCallbacks.append(callback)
+            }
         }
 
         guard didEncodeWork else { return }
         commandBuffer.commit()
+
+        if !cullCallbacks.isEmpty {
+            let callbacks = cullCallbacks
+            commandBuffer.addCompletedHandler { _ in
+                for callback in callbacks {
+                    let countPtr = callback.visibleCountBuffer.contents().bindMemory(to: UInt32.self, capacity: 1)
+                    let visibleCount = Int(countPtr.pointee)
+                    Self.pendingCullLock.lock()
+                    Self.pendingCullResults[callback.entityID] = visibleCount
+                    Self.pendingCullLock.unlock()
+                }
+            }
+        }
+    }
+
+    nonisolated(unsafe) static var pendingCullResults: [ObjectIdentifier: Int] = [:]
+    nonisolated(unsafe) static var pendingCullLock: NSLock = NSLock()
+
+    static func consumePendingCullResult(for entityID: ObjectIdentifier) -> Int? {
+        pendingCullLock.lock()
+        defer { pendingCullLock.unlock() }
+        return pendingCullResults.removeValue(forKey: entityID)
     }
 
     nonisolated static func encodeDirectSort(
@@ -42,6 +69,23 @@ extension GSSortingSystem {
 
         guard let encoder = commandBuffer.makeComputeCommandEncoder() else { return false }
         encoder.label = "GSKit Sort Pipeline"
+
+        // --- Cull Pass (optional) ---
+        if let cullPipeline = job.cullPipeline, let cullParams = job.cullParams {
+            let totalPaddedGroups = job.totalNumGroups
+            encoder.setComputePipelineState(cullPipeline)
+            encoder.setBuffer(job.positionBuffer, offset: 0, index: 0)
+            encoder.setBuffer(job.visibleIndicesBuffer, offset: 0, index: 1)
+            if let visibleCountBuffer = job.visibleCountBuffer {
+                encoder.setBuffer(visibleCountBuffer, offset: 0, index: 2)
+            }
+            var params = cullParams
+            encoder.setBytes(&params, length: MemoryLayout<CullKernelParams>.stride, index: 3)
+            encoder.dispatchThreadgroups(
+                MTLSize(width: totalPaddedGroups, height: 1, depth: 1),
+                threadsPerThreadgroup: threadsPerThreadgroup
+            )
+        }
 
         // --- Depth Pass ---
         encoder.setComputePipelineState(job.depthPipeline)
@@ -162,6 +206,7 @@ extension GSSortingSystem {
     struct SortDispatchJob: @unchecked Sendable {
         let commandQueue: MTLCommandQueue
         let depthPipeline: MTLComputePipelineState
+        let cullPipeline: MTLComputePipelineState?
         let radixCountPipeline: MTLComputePipelineState
         let radixScanPipeline: MTLComputePipelineState
         let radixScatterPipeline: MTLComputePipelineState
@@ -171,12 +216,27 @@ extension GSSortingSystem {
         let sortBufferA: MTLBuffer
         let sortBufferB: MTLBuffer
         let histogramBuffer: MTLBuffer
+        let visibleCountBuffer: MTLBuffer?
         let depthParams: DepthKernelParams
+        let cullParams: CullKernelParams?
         let radixPassParams: [RadixPassKernelParams]
         let scanParams: RadixScanKernelParams
         let writeParams: WriteIndicesKernelParams
         let activeCount: Int
         let numGroups: Int
         let radixPassCount: Int
+        let totalCount: Int
+        let totalNumGroups: Int
+        let onCullComplete: CullResultCallback?
+    }
+
+    final class CullResultCallback: @unchecked Sendable {
+        let entityID: ObjectIdentifier
+        let visibleCountBuffer: MTLBuffer
+
+        init(entityID: ObjectIdentifier, visibleCountBuffer: MTLBuffer) {
+            self.entityID = entityID
+            self.visibleCountBuffer = visibleCountBuffer
+        }
     }
 }

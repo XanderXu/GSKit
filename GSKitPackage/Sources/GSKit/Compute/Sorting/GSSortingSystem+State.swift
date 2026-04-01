@@ -76,6 +76,11 @@ extension GSSortingSystem {
             return nil
         }
 
+        // Consume async cull result from previous frame
+        if let pendingResult = Self.consumePendingCullResult(for: entityID) {
+            activeVisibleCountCache[entityID] = pendingResult
+        }
+
         let radixPassCount = recommendedRadixPassCount(
             localBounds: localBounds,
             localCameraPos: localCameraPos,
@@ -134,45 +139,71 @@ extension GSSortingSystem {
             return nil
         }
 
-        if !Self.useDirectionalCull, visibleIndexIdentityCountCache[entityID] != totalCount {
-            Self.fillIdentityVisibleIndices(visibleIndexBuffer: visibleIndexBuffer, count: totalCount)
-            visibleIndexIdentityCountCache[entityID] = totalCount
-        }
+        // Build cull params if directional culling is enabled
+        var cullParams: CullKernelParams? = nil
+        var cullCallback: CullResultCallback? = nil
+        var visibleCountBufferToUse: MTLBuffer? = nil
 
-        let cullThreshold = currentCullThreshold(for: entityID)
-        let visibleCount: Int
         if Self.useDirectionalCull {
             let shouldRecomputeVisibleSet = shouldRecomputeCompaction(
                 entityID: entityID,
                 localCameraPos: localCameraPos,
                 localCameraForward: localCameraForward,
                 now: now
-            ) || activeVisibleCountCache[entityID] == nil
+            )
 
             if shouldRecomputeVisibleSet {
-                let recomputedActiveCount = performGPUCompaction(
+                let visibleCountBuffer = getOrMakeBuffer(
+                    from: &visibleCountBuffers,
                     entityID: entityID,
-                    positionBuffer: data.positionBuffer,
-                    visibleIndexBuffer: visibleIndexBuffer,
-                    totalCount: totalCount,
-                    localCameraPos: localCameraPos,
-                    localCameraForward: localCameraForward,
-                    cullThreshold: cullThreshold
+                    size: MemoryLayout<UInt32>.stride,
+                    options: .storageModeShared
                 )
-                activeVisibleCountCache[entityID] = recomputedActiveCount
+                guard let visibleCountBuffer else { return nil }
+
+                // Zero the visible counter
+                let countPtr = visibleCountBuffer.contents().bindMemory(to: UInt32.self, capacity: 1)
+                countPtr.pointee = 0
+
+                let cullThreshold = currentCullThreshold(for: entityID)
+                cullParams = CullKernelParams(
+                    cameraLocalPos: SIMD4<Float>(localCameraPos.x, localCameraPos.y, localCameraPos.z, 0),
+                    cameraLocalForward: SIMD4<Float>(localCameraForward.x, localCameraForward.y, localCameraForward.z, 0),
+                    cullThreshold: cullThreshold,
+                    cullDistanceScale: Self.cullDistanceScale,
+                    totalCount: UInt32(totalCount),
+                    padding: 0
+                )
+                visibleCountBufferToUse = visibleCountBuffer
+                cullCallback = CullResultCallback(entityID: entityID, visibleCountBuffer: visibleCountBuffer)
+
                 lastCompactionPositions[entityID] = localCameraPos
                 lastCompactionForwards[entityID] = localCameraForward
                 lastCompactionTimes[entityID] = now
+
+                if !Self.useDirectionalCull, visibleIndexIdentityCountCache[entityID] != totalCount {
+                    Self.fillIdentityVisibleIndices(visibleIndexBuffer: visibleIndexBuffer, count: totalCount)
+                    visibleIndexIdentityCountCache[entityID] = totalCount
+                }
+            }
+        } else {
+            if visibleIndexIdentityCountCache[entityID] != totalCount {
+                Self.fillIdentityVisibleIndices(visibleIndexBuffer: visibleIndexBuffer, count: totalCount)
+                visibleIndexIdentityCountCache[entityID] = totalCount
+            }
+        }
+
+        let visibleCount: Int
+        if Self.useDirectionalCull {
+            visibleCount = activeVisibleCountCache[entityID] ?? totalCount
+            if visibleCount < totalCount {
                 updateCullThreshold(
                     for: entityID,
-                    activeCount: recomputedActiveCount,
+                    activeCount: visibleCount,
                     totalCount: totalCount,
-                    currentThreshold: cullThreshold,
+                    currentThreshold: currentCullThreshold(for: entityID),
                     frameDeltaTime: frameDeltaTime
                 )
-                visibleCount = recomputedActiveCount
-            } else {
-                visibleCount = activeVisibleCountCache[entityID] ?? 0
             }
         } else {
             activeVisibleCountCache[entityID] = totalCount
@@ -260,6 +291,7 @@ extension GSSortingSystem {
         let job = SortDispatchJob(
             commandQueue: commandQueue,
             depthPipeline: depthPipeline,
+            cullPipeline: cullParams != nil ? cullPipeline : nil,
             radixCountPipeline: radixCountPipeline,
             radixScanPipeline: radixScanPipeline,
             radixScatterPipeline: radixScatterPipeline,
@@ -269,13 +301,18 @@ extension GSSortingSystem {
             sortBufferA: sortBufferA,
             sortBufferB: sortBufferB,
             histogramBuffer: histogramBuffer,
+            visibleCountBuffer: visibleCountBufferToUse,
             depthParams: depthParams,
+            cullParams: cullParams,
             radixPassParams: radixPassParams,
             scanParams: scanParams,
             writeParams: writeParams,
             activeCount: activeCount,
             numGroups: activeNumGroups,
-            radixPassCount: stabilizedPassCount
+            radixPassCount: stabilizedPassCount,
+            totalCount: totalCount,
+            totalNumGroups: totalNumGroups,
+            onCullComplete: cullCallback
         )
 
         lastSortTimes[entityID] = now
@@ -283,64 +320,6 @@ extension GSSortingSystem {
             job: job,
             target: SortCompletionTarget(entity: entity, lowLevelMesh: data.lowLevelMesh)
         )
-    }
-
-    func performGPUCompaction(
-        entityID: ObjectIdentifier,
-        positionBuffer: MTLBuffer,
-        visibleIndexBuffer: MTLBuffer,
-        totalCount: Int,
-        localCameraPos: SIMD3<Float>,
-        localCameraForward: SIMD3<Float>,
-        cullThreshold: Float
-    ) -> Int {
-        guard let pipeline = cullPipeline else { return 0 }
-
-        let visibleCountBuffer = getOrMakeBuffer(
-            from: &visibleCountBuffers,
-            entityID: entityID,
-            size: MemoryLayout<UInt32>.stride,
-            options: .storageModeShared
-        )
-        guard let visibleCountBuffer else { return 0 }
-
-        // Zero the visible counter
-        let countPtr = visibleCountBuffer.contents().bindMemory(to: UInt32.self, capacity: 1)
-        countPtr.pointee = 0
-
-        guard let commandBuffer = commandQueue.makeCommandBuffer(),
-              let encoder = commandBuffer.makeComputeCommandEncoder() else {
-            return 0
-        }
-
-        let threadGroupSize = 256
-        let paddedCount = max(256, ((totalCount + 255) / 256) * 256)
-        let numGroups = (paddedCount + threadGroupSize - 1) / threadGroupSize
-
-        encoder.label = "GSKit Cull Compact"
-        encoder.setComputePipelineState(pipeline)
-        encoder.setBuffer(positionBuffer, offset: 0, index: 0)
-        encoder.setBuffer(visibleIndexBuffer, offset: 0, index: 1)
-        encoder.setBuffer(visibleCountBuffer, offset: 0, index: 2)
-        var params = CullKernelParams(
-            cameraLocalPos: SIMD4<Float>(localCameraPos.x, localCameraPos.y, localCameraPos.z, 0),
-            cameraLocalForward: SIMD4<Float>(localCameraForward.x, localCameraForward.y, localCameraForward.z, 0),
-            cullThreshold: cullThreshold,
-            cullDistanceScale: Self.cullDistanceScale,
-            totalCount: UInt32(totalCount),
-            padding: 0
-        )
-        encoder.setBytes(&params, length: MemoryLayout<CullKernelParams>.stride, index: 3)
-        encoder.dispatchThreadgroups(
-            MTLSize(width: numGroups, height: 1, depth: 1),
-            threadsPerThreadgroup: MTLSize(width: threadGroupSize, height: 1, depth: 1)
-        )
-        encoder.endEncoding()
-
-        commandBuffer.commit()
-        commandBuffer.waitUntilCompleted()
-
-        return Int(countPtr.pointee)
     }
 
     func getOrMakeBuffer(
